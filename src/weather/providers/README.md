@@ -22,7 +22,6 @@ abstract base classes that define the shared provider contract.
 | `base.py` | `Protocol` | Minimal typing interface used by the CLI registry (`WeatherProvider`) |
 | `base_downloader.py` | Abstract base class | Template-method download skeleton: `is_complete → skip / _fetch` |
 | `base_decompressor.py` | Abstract base class | Template-method decompress skeleton: skip-if-done logic |
-| `base_percentile.py` | Abstract base class | **Dead code** — superseded by the standalone `percentile_index.py` scripts (see below); no provider subclasses it |
 
 ### Adding a new provider
 
@@ -30,20 +29,9 @@ abstract base classes that define the shared provider contract.
 2. Implement `download.py`, `decompress.py`, `transform.py`, `pipeline.py`
    extending the corresponding base classes.
 3. Register the provider name in `weather/registry.py`.
-4. Optionally add `percentile.py` extending `base_percentile.py`.
+4. Add `percentile_index.py` following the pattern below.
 
 ---
-
-## `base_percentile.py` — dead code, do not use for new providers
-
-An earlier template-method design (`annual_metric`/`load_annual_dataset`/
-`standard_time_hours`, one annual NetCDF per year) lived in
-`cosmo_rea6/percentile.py`. It was **deleted** (commit `17d5eea`, "Added
-percentile and documentation") and replaced by the standalone
-`percentile_index.py` scripts described below, which do not use
-`base_percentile.py` at all. The base class and `common/percentile.py`
-still exist in the tree but are unused — check with the team before
-building a new provider against them.
 
 ## `percentile_index.py` — the actual production pattern (COSMO + ERA5-Land)
 

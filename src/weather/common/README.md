@@ -21,7 +21,6 @@ instead.
 | `parallel.py` | `ThreadPoolExecutor` wrapper (`run_parallel`) | Download and decompress parallelism is the same pattern for all providers |
 | `merge.py` | `NetCDFMerger` — h5py-based monthly → annual NetCDF merge | Post-processing step used after any provider's monthly output |
 | `derived_attributes.py` | GHI/DHI/DNI formula registry; `apply_derived_fields` dispatcher | **All three providers** use the same irradiance formulas — see note below |
-| `percentile.py` | P10/P50/P90 metric-stack → representative-year selection | Core algorithm shared by `base_percentile.py` and all provider subclasses |
 
 ---
 
@@ -87,7 +86,7 @@ Phase 3 — Transform (per provider)
 
 Post-processing
   merge.py (monthly NCs → annual NC)
-  percentile.py ──► base_percentile.py ──► provider/percentile.py
+  provider/percentile_index.py (standalone, see providers/README.md)
 
 Cleanup (between phases)
   cleanup.py

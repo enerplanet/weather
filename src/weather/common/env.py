@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 _ENV_LOADED = False
 
 
@@ -23,33 +25,6 @@ def _resolve_path(raw: str, *, base: Path) -> Path:
     if not p.is_absolute():
         p = base / p
     return p.resolve()
-
-
-def _load_dotenv_fallback(path: Path) -> None:
-    """Minimal .env loader used when python-dotenv is not installed.
-
-    Parses ``KEY=VALUE`` lines, skips blank lines and ``#`` comments,
-    strips surrounding quotes from values, and sets ``os.environ``
-    (always overrides, same as ``load_dotenv(..., override=True)``).
-    """
-    with open(path, encoding="utf-8") as fh:
-        for raw_line in fh:
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            # Drop inline comments and strip surrounding quotes.
-            value = value.split("#")[0].strip()
-            quoted = (
-                len(value) >= 2
-                and value[0] in ('"', "'")
-                and value[-1] == value[0]
-            )
-            if quoted:
-                value = value[1:-1]
-            if key:
-                os.environ[key] = value
 
 
 def load_repo_env() -> None:
@@ -84,11 +59,7 @@ def load_repo_env() -> None:
 
     for candidate in candidates:
         if candidate.is_file():
-            try:
-                from dotenv import load_dotenv  # type: ignore
-                load_dotenv(candidate, override=True)
-            except ImportError:
-                _load_dotenv_fallback(candidate)
+            load_dotenv(candidate, override=True)
             break
 
     _ENV_LOADED = True

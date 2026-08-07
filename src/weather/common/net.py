@@ -1,4 +1,4 @@
-"""HTTP networking utilities: auth helpers, retry logic, and rate limiting.
+"""HTTP networking utilities: auth helpers and retry logic.
 
 Shared by all providers that fetch data over HTTP/HTTPS.  Providers should
 import individual helpers as needed rather than depending on this module as
@@ -8,7 +8,6 @@ Public API
 ----------
 build_session(auth, ...)        Build a ``requests.Session`` with auth/retry.
 exponential_backoff(...)        Decorator — retry a function with back-off.
-RateLimiter                     Context-manager / callable rate limiter.
 netrc_auth(host)                Look up credentials from ``~/.netrc``.
 earthdata_auth()                Return NASA Earthdata credentials.
 """
@@ -185,49 +184,6 @@ def exponential_backoff(
         return wrapper  # type: ignore[return-value]
 
     return decorator
-
-
-# ---------------------------------------------------------------------------
-# Rate limiter
-# ---------------------------------------------------------------------------
-
-class RateLimiter:
-    """Simple token-bucket rate limiter.
-
-    Ensures at most *calls_per_second* calls pass through per wall-clock
-    second.  Safe for single-threaded use; not thread-safe.
-
-    Usage::
-
-        limiter = RateLimiter(calls_per_second=2)
-
-        for url in urls:
-            limiter()               # block until slot is available
-            response = session.get(url)
-
-        # Or as a context manager:
-        with RateLimiter(calls_per_second=2) as limiter:
-            ...
-    """
-
-    def __init__(self, calls_per_second: float = 1.0) -> None:
-        if calls_per_second <= 0:
-            raise ValueError("calls_per_second must be positive")
-        self._min_interval = 1.0 / calls_per_second
-        self._last_call: float = 0.0
-
-    def __call__(self) -> None:
-        now = time.monotonic()
-        wait = self._min_interval - (now - self._last_call)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_call = time.monotonic()
-
-    def __enter__(self) -> RateLimiter:
-        return self
-
-    def __exit__(self, *_: Any) -> None:
-        pass
 
 
 # ---------------------------------------------------------------------------
