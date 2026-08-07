@@ -1,0 +1,228 @@
+openapi: 3.0.3
+
+info:
+  title: weather point-query API
+  version: 0.1.0
+  description: |
+    Thin HTTP interface over `weather.get_point_weather()`: given a
+    (provider, latitude, longitude, year), returns already-processed
+    hourly temperature and irradiance for the nearest grid cell.
+
+    Built for one specific gap: this repo's processed archives live on a
+    university server behind VPN. A request-serving container (e.g. a
+    buem/PV/wind gateway) can't join that VPN the way a developer does.
+    This lets a small service running on/near the data host sit inside
+    the network boundary, while every other caller reaches it over plain
+    HTTP and never needs filesystem or bulk archive access.
+
+    Deliberately narrow: one point-query operation, nothing else. No
+    file listing, no bulk/archive download. See
+    `src/weather/api/README.md` for the full design rationale.
+
+    **Status: scaffold.** Not deployed. The reference implementation
+    (`weather serve`) runs Flask's dev server — fine for local testing,
+    not for production (no concurrency, no TLS, in-memory rate limiter
+    only correct for a single process). A real deployment runs this
+    under gunicorn/similar behind a reverse proxy, the same shape as
+    `buem-model`/`buem-gateway`.
+
+    ## Authentication
+
+    Static API keys via `WEATHER_API_KEYS` (comma-separated), checked
+    against the `X-API-Key` header on every request. Not a substitute
+    for network-level restriction — pair with a firewall/IP allowlist
+    scoped to known caller egress.
+
+    ## Rate limiting
+
+    Per-key fixed-window limit (`WEATHER_API_RATE_LIMIT`, default 60
+    req/min), guarding against many small point queries reconstructing
+    a bulk archive. In-memory and per-process: correct for a single dev
+    server, not for a multi-worker deployment (would need a shared
+    store, e.g. Redis).
+  license:
+    name: MIT
+    url: https://github.com/UU-BUEM/weather/blob/main/LICENSE
+  contact:
+    name: UU-BUEM
+    url: https://github.com/UU-BUEM/weather
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local dev server (`weather serve --host 127.0.0.1 --port 8080`)
+
+tags:
+  - name: Health
+    description: Liveness and archive-availability check
+  - name: Weather
+    description: Single-location point query
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /v1/health:
+    get:
+      tags: [Health]
+      summary: Per-provider archive availability
+      description: |
+        Years with a processed archive for each provider, inferred from
+        filenames already on disk. Deliberately does not expose a raw
+        directory listing.
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                providers:
+                  era5-land:
+                    years: [2018, 2019]
+                  cosmo-rea6:
+                    years: [2018]
+                  merra-2:
+                    years: [2018]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Server misconfigured (no API keys set)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/weather/point:
+    get:
+      tags: [Weather]
+      summary: Hourly weather at one location/year
+      description: |
+        Extracts the nearest already-processed grid cell's hourly
+        temperature and irradiance for one (provider, latitude,
+        longitude, year). Does not download or process data — the
+        relevant provider pipeline must already have run for that year.
+      operationId: getWeatherPoint
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [era5-land, cosmo-rea6, merra-2]
+        - name: lat
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+        - name: lon
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+        - name: year
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: |
+            Parquet-encoded hourly DataFrame. Columns, in order: the
+            reset DatetimeIndex (tz-naive, hourly), then `T` (degC),
+            `GHI`, `DHI`, `DNI` (all W/m^2). 8760 rows (8784 in a leap
+            year).
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Missing/non-numeric lat, lon, year, or missing provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No processed archive for (provider, year) at this data_dir
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: |
+            Archive exists but isn't in a servable state — an
+            unrepaired ERA5-Land boundary month, or a file that
+            predates the lat/lon-retention convention. A real
+            server-side data problem, not a bad request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid X-API-Key
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RateLimited:
+      description: Per-key rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    HealthResponse:
+      type: object
+      required: [status, providers]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        providers:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: object
+                required: [years]
+                properties:
+                  years:
+                    type: array
+                    items:
+                      type: integer
+              - type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string

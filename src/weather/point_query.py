@@ -76,6 +76,39 @@ def _output_dir(canonical: str, data_dir: Path | str | None) -> Path:
     return data_root() / _OUTPUT_SUBDIR[canonical] / "output"
 
 
+def _resolve_country_dir(
+    canonical: str, latitude: float, longitude: float, year: int
+) -> Path | None:
+    """Best-effort lookup of a country-scoped output directory for
+    *(latitude, longitude)*, following the ``<provider>/<country>/output``
+    layout (see ``docs/COUNTRY_SCOPED_ARCHIVES.md``).
+
+    Returns ``None`` -- meaning "fall through to the provider's flat
+    default directory" -- whenever nothing more specific is available:
+    no country's bounding box contains the point, or the matching
+    country has no archive for *year* yet. This is an optimization over
+    the default directory, never a requirement; every caller still gets
+    a normal (or FileNotFoundError) result either way.
+
+    Country bounding boxes are simple rectangles (see
+    ``geo.countries.COUNTRIES``), so two neighbouring countries can
+    overlap near a shared border; the first match (dict iteration order)
+    wins. Fine for a handful of countries -- revisit with a proper
+    nearest-centroid tiebreak if this list grows large enough for
+    overlaps to matter often.
+    """
+    from .geo.countries import COUNTRIES
+
+    provider_root = data_root() / _OUTPUT_SUBDIR[canonical]
+    for country, bbox in COUNTRIES.items():
+        if not (bbox.south <= latitude <= bbox.north and bbox.west <= longitude <= bbox.east):
+            continue
+        candidate = provider_root / country / "output"
+        if candidate.is_dir() and any(candidate.glob(f"*{year}*")):
+            return candidate
+    return None
+
+
 def _finalize(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize the index to tz-naive and select the canonical columns."""
     idx = pd.DatetimeIndex(df.index)
@@ -385,8 +418,13 @@ def get_point_weather(
         (aliases ``era5``, ``cosmo``, ``merra2`` also accepted).
     data_dir : Path or str, optional
         Directory containing the provider's already-exported ``.nc``
-        files. Defaults to that provider's own ``<work_dir>/output``
-        convention (``weather.common.env.data_root()/<provider>/output``).
+        files. If omitted, first tries a country-scoped archive whose
+        bounding box contains *(latitude, longitude)* (the
+        ``<provider>/<country>/output`` layout — see
+        ``docs/COUNTRY_SCOPED_ARCHIVES.md``), then falls back to that
+        provider's flat ``<work_dir>/output`` convention
+        (``weather.common.env.data_root()/<provider>/output``) if no
+        country-scoped archive covers this location/year.
 
     Returns
     -------
@@ -410,5 +448,8 @@ def get_point_weather(
     if canonical is None:
         available = ", ".join(sorted(set(_ALIASES.values())))
         raise ValueError(f"Unknown provider: {provider!r}. Available: {available}")
+
+    if data_dir is None:
+        data_dir = _resolve_country_dir(canonical, latitude, longitude, year)
 
     return _DISPATCH[canonical](latitude, longitude, year, data_dir)

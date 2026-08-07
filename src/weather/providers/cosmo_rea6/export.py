@@ -31,6 +31,44 @@ logger = logging.getLogger(__name__)
 os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 
 
+def _add_cf_grid_attrs(ds: xarray.Dataset) -> None:
+    """Attach CF metadata to the 2-D lat/lon coordinates in place.
+
+    Without ``standard_name``/``units`` on the coordinate variables, CDO
+    (and other CF-aware tools) can't tell this is a curvilinear lat/lon
+    grid and reports "Unsupported grid type: generic" -- exactly the
+    failure that blocked ``weather.geo.crop.crop_to_country()`` against
+    COSMO-REA6 output. Same category of gap as the fix already applied to
+    ``merra2``/``era5_land``'s transform.py for their regular grids; this
+    is COSMO's curvilinear equivalent.
+
+    Deliberately does NOT set a ``coordinates`` attribute on each data
+    variable by hand -- xarray's own ``to_netcdf()`` already detects
+    ``latitude``/``longitude`` as non-dimension coordinates and populates
+    each variable's ``encoding["coordinates"]`` automatically; setting
+    the same thing in ``attrs`` too raises ``ValueError: 'coordinates'
+    found in both attrs and encoding`` at write time (hit this for real
+    on the first attempt). Native rotated-pole rlat/rlon axes and a
+    formal CF ``grid_mapping`` variable are also deliberately not
+    reconstructed here -- that's a bigger change than a bbox crop needs,
+    and every rotation parameter (``GRIB_latitudeOfSouthernPoleInDegrees``
+    etc.) already survives on each data variable's own GRIB_* attrs for
+    anyone who later needs it.
+    """
+    if "latitude" in ds.coords:
+        ds["latitude"].attrs.update({
+            "standard_name": "latitude",
+            "long_name": "latitude",
+            "units": "degrees_north",
+        })
+    if "longitude" in ds.coords:
+        ds["longitude"].attrs.update({
+            "standard_name": "longitude",
+            "long_name": "longitude",
+            "units": "degrees_east",
+        })
+
+
 def _build_encoding(ds: xarray.Dataset, complevel: int = 1) -> dict:
     """Build per-variable NetCDF encoding with zlib compression.
 
@@ -109,6 +147,7 @@ def export_netcdf(
             ds[var_name] = ds[var_name].compute()
     logger.info("  All variables computed in %.1f s", time.perf_counter() - t0)
 
+    _add_cf_grid_attrs(ds)
     encoding = _build_encoding(ds, complevel=complevel)
     logger.info("Writing NetCDF to %s (complevel=%d)", output_path, complevel)
 
