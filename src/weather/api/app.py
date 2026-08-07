@@ -22,6 +22,7 @@ README.md in this directory.
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import os
@@ -33,6 +34,38 @@ from typing import Any
 from flask import Flask, Response, jsonify, request
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=int(os.environ.get("WEATHER_API_CACHE_SIZE", "256")))
+def _cached_point_weather(provider: str, latitude: float, longitude: float, year: int):
+    """Cached wrapper over ``get_point_weather`` -- safe to cache forever.
+
+    Unlike most caches, this one has no staleness problem: a processed
+    archive for (provider, latitude, longitude, year) is immutable once
+    built (barring a deliberate pipeline re-run, which is a rare, manual
+    event, not something this cache needs to detect). No TTL, no
+    invalidation logic -- just reuse by key for the life of the process.
+
+    Exists because the underlying call is genuinely expensive per request
+    -- opening the archive file(s) plus live DISC/DIRINT DNI/DHI
+    reconstruction over the full timeseries, not a cheap lookup (see
+    point_query.py's own module docstring) -- and multiple consumers
+    (buem-gateway today, other tech-specific gateways later) querying the
+    same location/year would otherwise each pay that cost independently.
+
+    In-memory and per-process, same caveat as the rate limiter below: correct
+    for a single dev-server process, not for a multi-worker production
+    deployment (would need a shared cache, e.g. Redis, at that point --
+    `WEATHER_API_CACHE_SIZE` only bounds one worker's own cache).
+
+    A failed lookup (``FileNotFoundError`` etc.) is never cached --
+    ``lru_cache`` only caches a function's return value, not an exception
+    it raised, so a location with no archive yet keeps retrying on every
+    call rather than caching the failure.
+    """
+    from weather import get_point_weather
+
+    return get_point_weather(latitude, longitude, year, provider=provider)
 
 _PROVIDER_OUTPUT_DIR_GETTERS = {
     "merra-2": "merra2_output_dir",
@@ -169,12 +202,8 @@ def create_app() -> Flask:
         if not provider:
             return jsonify(error="provider is required"), 400
 
-        from weather import get_point_weather
-
         try:
-            df = get_point_weather(
-                latitude, longitude, year, provider=provider
-            )
+            df = _cached_point_weather(provider, latitude, longitude, year)
         except FileNotFoundError as exc:
             return jsonify(error=str(exc)), 404
         except ValueError as exc:
