@@ -828,6 +828,21 @@ def build_monthly_dataset(
             latitude=("y", lat_vals),
             longitude=("x", lon_vals),
         )
+        # CF attrs on the coordinate variables themselves -- without these,
+        # tools that key off standard_name/units instead of variable name
+        # (e.g. CDO's grid-type detection in weather.geo.crop) see an
+        # unrecognized "generic" grid and refuse to operate, even though
+        # xarray's own .sel(method="nearest") never needed them.
+        ds["latitude"].attrs = {
+            "standard_name": "latitude",
+            "long_name": "latitude",
+            "units": "degrees_north",
+        }
+        ds["longitude"].attrs = {
+            "standard_name": "longitude",
+            "long_name": "longitude",
+            "units": "degrees_east",
+        }
         # Replace the bare index coords y/x with simple integer indices
         # (optional, keeps them lightweight; comment out to keep floats).
         ds = ds.assign_coords(
