@@ -19,6 +19,12 @@ while callers outside it never need filesystem or bulk access.
 returned as a parquet-encoded body (`application/octet-stream`; the reset
 index column is first, then `T`/`GHI`/`DHI`/`DNI`).
 
+Add `&format=json` to get the same data as a JSON body instead
+(`{"index": [...], "T": [...], "GHI": [...], "DHI": [...], "DNI": [...]}`,
+shaped to match buem's `WeatherConfig` dict directly) — for a caller that
+doesn't want a parquet-parsing dependency just to consume this endpoint.
+`NaN` values serialize as JSON `null`.
+
 `GET /v1/health` → per-provider list of years with a processed archive,
 derived from filenames already on disk. Deliberately does not expose a raw
 directory listing.

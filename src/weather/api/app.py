@@ -22,6 +22,7 @@ README.md in this directory.
 
 from __future__ import annotations
 
+import functools
 import io
 import logging
 import os
@@ -30,9 +31,28 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from flask import Flask, Response, jsonify, request
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=int(os.environ.get("WEATHER_API_CACHE_SIZE", "256")))
+def _cached_point_weather(provider: str, latitude: float, longitude: float, year: int):
+    """Return the point weather timeseries, cached per (provider, lat, lon, year).
+
+    Returns a DataFrame indexed on ``time`` with T/GHI/DNI/DHI columns.
+    Raises whatever ``get_point_weather`` raises; failures are not cached,
+    since ``lru_cache`` stores return values only.
+
+    Cached without TTL because a processed archive is immutable once built.
+    The underlying call is expensive (archive open plus DISC/DIRINT DNI/DHI
+    reconstruction, see ``point_query.py``) and multiple gateways query the
+    same key.
+    """
+    from weather import get_point_weather
+
+    return get_point_weather(latitude, longitude, year, provider=provider)
 
 _PROVIDER_OUTPUT_DIR_GETTERS = {
     "merra-2": "merra2_output_dir",
@@ -169,12 +189,8 @@ def create_app() -> Flask:
         if not provider:
             return jsonify(error="provider is required"), 400
 
-        from weather import get_point_weather
-
         try:
-            df = get_point_weather(
-                latitude, longitude, year, provider=provider
-            )
+            df = _cached_point_weather(provider, latitude, longitude, year)
         except FileNotFoundError as exc:
             return jsonify(error=str(exc)), 404
         except ValueError as exc:
@@ -188,6 +204,31 @@ def create_app() -> Flask:
             # a bad request or a crash -- surface them as such instead
             # of falling through to Flask's generic unhelpful 500.
             return jsonify(error=str(exc)), 503
+
+        if request.args.get("format", "parquet").lower() == "json":
+            # JSON mode: same cached DataFrame, shaped to match buem's own
+            # WeatherConfig dict format directly (index/T/GHI/DNI/DHI) --
+            # see buem/src/buem/config/cfg_building.py::WeatherConfig --
+            # so a Go (or any) caller can decode straight into the request
+            # payload it already builds, no parquet-parsing dependency
+            # needed just to consume this one endpoint.
+            # NaN -> None so this serializes as JSON `null`, not the bare
+            # `NaN` token Python's json module emits by default -- that
+            # token is invalid JSON and a strict decoder (e.g. Go's
+            # encoding/json) rejects the whole response outright. Real,
+            # not hypothetical: ERA5-Land's boundary-repaired archive-start
+            # hour is exactly this case (see docs/COUNTRY_SCOPED_ARCHIVES.md).
+            def _col(name: str) -> list:
+                return [None if pd.isna(v) else float(v) for v in out[name]]
+
+            out = df.reset_index()
+            return jsonify(
+                index=[ts.isoformat() for ts in out["time"]],
+                T=_col("T"),
+                GHI=_col("GHI"),
+                DHI=_col("DHI"),
+                DNI=_col("DNI"),
+            )
 
         buf = io.BytesIO()
         df.reset_index().to_parquet(buf, index=False)
