@@ -4,8 +4,9 @@ This module does **not** download or process data itself — it only opens
 NetCDF files that a prior ``weather run --provider ... --year ...`` (or
 equivalent pipeline call) already produced, and extracts the nearest grid
 cell's requested variables for one ``(latitude, longitude, year)`` -- see
-``weather.variables`` for the full registry (``T``/``GHI``/``DHI``/``DNI``
-by default, or wind's ``WS_10M``/``U_10M``/``V_10M``). This keeps it
+``weather.variables`` for the full registry (solar: ``T``/``GHI``/
+``DHI``/``DNI``, wind: ``WS_10M``/``U_10M``/``V_10M``). *variables*/
+*use_case* has no default -- exactly one is required. This keeps it
 import-light: only ``numpy``/``pandas``/``xarray``/``netcdf4`` (the
 ``pointquery`` extra) plus ``pvlib`` (the ``solar`` extra, only actually
 imported when GHI/DHI/DNI are requested) for DNI/DHI reconstruction —
@@ -16,9 +17,8 @@ Typical usage::
 
     from weather import get_point_weather
 
-    df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
-    # df: DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2) -- the
-    # default ("solar") use_case
+    df = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="solar")
+    # df: DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
 
     wind = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="wind")
     # df: DatetimeIndex, columns WS_10M/U_10M/V_10M (m/s)
@@ -495,14 +495,14 @@ def get_point_weather(
     variables : str or list of str, optional
         Comma-separated string or list of canonical variable names (see
         ``weather.variables.VARIABLES``) to return, e.g. ``"T,GHI"`` or
-        ``["WS_10M", "U_10M", "V_10M"]``. At most one of *variables*/
-        *use_case* may be given.
+        ``["WS_10M", "U_10M", "V_10M"]``. Exactly one of *variables*/
+        *use_case* is required.
     use_case : str, optional
         Shorthand for a named variable set (see
         ``weather.variables.USE_CASES``), e.g. ``"solar"`` or ``"wind"``.
-        Defaults to ``"solar"`` (``T``/``GHI``/``DHI``/``DNI``) when
-        neither *variables* nor *use_case* is given, matching this
-        function's behavior before these parameters existed.
+        Exactly one of *variables*/*use_case* is required -- no default,
+        so a caller that forgets to say what it needs gets a clear
+        error instead of a silently-substituted guess.
 
     Returns
     -------

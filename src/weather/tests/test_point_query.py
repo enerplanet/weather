@@ -140,7 +140,9 @@ class TestGetPointWeatherRegularGrid:
         out_dir = self._write_archive(
             tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times, "sp"
         )
-        df = get_point_weather(50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir)
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="solar"
+        )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
         assert df.index.tz is None
@@ -149,7 +151,9 @@ class TestGetPointWeatherRegularGrid:
         out_dir = self._write_archive(
             tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times, "PS"
         )
-        df = get_point_weather(50.05, 4.05, 2018, provider="merra2", data_dir=out_dir)
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="merra2", data_dir=out_dir, use_case="solar"
+        )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
 
@@ -161,7 +165,9 @@ class TestGetPointWeatherRegularGrid:
         out_dir = tmp_path / "era5_land" / "output"
         out_dir.mkdir(parents=True)
         with pytest.raises(FileNotFoundError):
-            get_point_weather(50.0, 4.0, 2018, provider="era5-land", data_dir=out_dir)
+            get_point_weather(
+                50.0, 4.0, 2018, provider="era5-land", data_dir=out_dir, use_case="solar"
+            )
 
     def test_wind_use_case(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
@@ -240,7 +246,9 @@ class TestGetPointWeatherCosmo:
         out_dir.mkdir(parents=True)
         ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")
 
-        df = get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+        )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
 
@@ -261,7 +269,9 @@ class TestGetPointWeatherCosmo:
         ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")
 
         with pytest.raises(KeyError):
-            get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+            get_point_weather(
+                50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+            )
 
     def test_cosmo_wind_use_case(self, tmp_path, hourly_times) -> None:
         lat_2d = np.array(

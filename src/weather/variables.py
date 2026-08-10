@@ -52,9 +52,6 @@ USE_CASES: dict[str, tuple[str, ...]] = {
     "wind": ("WS_10M", "U_10M", "V_10M"),
 }
 
-DEFAULT_USE_CASE = "solar"
-
-
 def resolve_variables(
     variables: str | list[str] | tuple[str, ...] | None = None,
     use_case: str | None = None,
@@ -62,15 +59,15 @@ def resolve_variables(
     """Resolve a caller's ``variables``/``use_case`` request to a concrete,
     validated tuple of canonical variable names.
 
-    Exactly one of *variables*/*use_case* may be given; if neither is
-    given, defaults to ``USE_CASES[DEFAULT_USE_CASE]`` (solar) -- matching
-    every caller's behavior before this parameter existed, so nothing
-    already depending on the old T/GHI/DHI/DNI default breaks.
+    Exactly one of *variables*/*use_case* is required -- no default. A
+    caller that forgets to say what it needs should get a clear error,
+    not a silently-substituted guess it might not notice is wrong (same
+    reasoning as BuEM's own required-weather change).
 
     Raises
     ------
     ValueError
-        If both are given, or either names something not in
+        If neither or both are given, or either names something not in
         ``VARIABLES``/``USE_CASES`` -- the bad value(s) are named in the
         message, not just "invalid request".
     """
@@ -99,4 +96,8 @@ def resolve_variables(
             raise ValueError("variables was given but empty")
         return tuple(names)
 
-    return USE_CASES[DEFAULT_USE_CASE]
+    available = ", ".join(sorted(USE_CASES))
+    raise ValueError(
+        "Specify one of variables/use_case -- e.g. use_case=solar or "
+        f"variables=T,GHI,DHI,DNI. Available use_case names: {available}"
+    )

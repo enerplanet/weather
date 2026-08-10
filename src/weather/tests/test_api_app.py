@@ -65,7 +65,8 @@ def _patch_get_point_weather(monkeypatch):
 def test_weather_point_json_format(client, monkeypatch):
     _patch_get_point_weather(monkeypatch)
     resp = client.get(
-        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018&format=json",
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018"
+        "&use_case=solar&format=json",
         headers={"X-API-Key": API_KEY},
     )
     assert resp.status_code == 200
@@ -78,11 +79,21 @@ def test_weather_point_json_format(client, monkeypatch):
 def test_weather_point_default_format_is_parquet(client, monkeypatch):
     _patch_get_point_weather(monkeypatch)
     resp = client.get(
-        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018",
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018&use_case=solar",
         headers={"X-API-Key": API_KEY},
     )
     assert resp.status_code == 200
     assert resp.mimetype == "application/octet-stream"
+
+
+def test_weather_point_requires_variables_or_use_case(client, monkeypatch):
+    _patch_get_point_weather(monkeypatch)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 400
+    assert "Specify one of" in resp.get_json()["error"]
 
 
 def test_weather_point_requires_api_key(client, monkeypatch):

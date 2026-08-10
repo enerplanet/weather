@@ -178,7 +178,7 @@ archive directly:
 ```python
 from weather import get_point_weather
 
-df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
+df = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="solar")
 # df: hourly DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
 ```
 

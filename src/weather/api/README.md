@@ -21,19 +21,18 @@ index column is first, then one column per resolved variable, in order).
 
 Add `&format=json` to get the same data as a JSON body instead
 (`{"index": [...], "T": [...], ...}`, one key per resolved variable,
-shaped to match buem's `WeatherConfig` dict directly for the default
-`solar` use_case) — for a caller that doesn't want a parquet-parsing
-dependency just to consume this endpoint. `NaN` values serialize as JSON
-`null`.
+shaped to match buem's `WeatherConfig` dict directly for the `solar`
+use_case) — for a caller that doesn't want a parquet-parsing dependency
+just to consume this endpoint. `NaN` values serialize as JSON `null`.
 
-By default this returns temperature/irradiance (`T`/`GHI`/`DHI`/`DNI`,
-the `solar` use_case). Add `&use_case=wind` for wind
-(`WS_10M`/`U_10M`/`V_10M`), or `&variables=T,WS_10M` to name exact
-variables directly (at most one of `variables`/`use_case`; see
-`weather.variables` for the full registry). `GET /v1/weather/variables`
-lists every variable's name/unit/description and every `use_case`'s
-members, so a caller doesn't need to already know the meteorological
-variable names.
+Exactly one of `&use_case=` / `&variables=` is required -- no default,
+so a caller that forgets to say what it needs gets a 400, not a silent
+guess. `use_case=solar` (`T`/`GHI`/`DHI`/`DNI`) or `use_case=wind`
+(`WS_10M`/`U_10M`/`V_10M`) are the named shortcuts; `variables=T,WS_10M`
+names exact variables directly (see `weather.variables` for the full
+registry). `GET /v1/weather/variables` lists every variable's name/
+unit/description and every `use_case`'s members, so a caller doesn't
+need to already know the meteorological variable names.
 
 `GET /v1/health` → liveness only, `{"status": "ok"}`, no filesystem I/O.
 

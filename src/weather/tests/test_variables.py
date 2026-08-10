@@ -10,8 +10,9 @@ import pytest
 from weather.variables import USE_CASES, VARIABLES, resolve_variables
 
 
-def test_default_matches_pre_existing_solar_behavior():
-    assert resolve_variables() == ("T", "GHI", "DHI", "DNI")
+def test_neither_given_raises():
+    with pytest.raises(ValueError, match="Specify one of"):
+        resolve_variables()
 
 
 def test_use_case_solar():

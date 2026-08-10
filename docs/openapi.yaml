@@ -24,12 +24,12 @@ info:
     Solar (`T`/`GHI`/`DHI`/`DNI`) and wind (`WS_10M`/`U_10M`/`V_10M`) are
     both queryable -- pick a technology shorthand with `use_case=solar`
     or `use_case=wind`, or name exact variables directly with
-    `variables=T,WS_10M`. Not sure what's available? `GET
+    `variables=T,WS_10M`. **Exactly one of these is required** -- no
+    default, so a caller that forgets to say what it needs gets a 400,
+    not a silent guess. Not sure what's available? `GET
     /v1/weather/variables` first -- it lists every variable's unit and
     description, and every `use_case`'s member list, so a caller doesn't
-    need to already know the meteorological variable names. Defaults to
-    `use_case=solar` when neither is given, matching every caller's
-    behavior before these params existed.
+    need to already know the meteorological variable names.
 
     ## Choosing a response format
 
@@ -212,9 +212,8 @@ paths:
           required: false
           description: |
             Shorthand for a named variable set -- see `GET
-            /v1/weather/variables` for each use_case's members. At most
-            one of `variables`/`use_case` may be given; defaults to
-            `solar` if neither is given.
+            /v1/weather/variables` for each use_case's members. Exactly
+            one of `variables`/`use_case` is required -- no default.
           schema:
             type: string
             enum: [solar, wind]
@@ -226,8 +225,8 @@ paths:
           description: |
             Exact variable names -- an escape hatch for a combination
             no `use_case` covers. See `GET /v1/weather/variables` for
-            each one's unit/description. At most one of
-            `variables`/`use_case` may be given.
+            each one's unit/description. Exactly one of `variables`/
+            `use_case` is required -- no default.
           schema:
             type: array
             items:
@@ -261,8 +260,9 @@ paths:
         "400":
           description: |
             Missing/non-numeric lat, lon, year, or missing provider; or
-            an unknown `variables`/`use_case` value, or both given
-            together (see `GET /v1/weather/variables` for valid names).
+            neither `variables` nor `use_case` given, an unknown value
+            for either, or both given together (see `GET
+            /v1/weather/variables` for valid names).
           content:
             application/json:
               schema:
@@ -360,8 +360,8 @@ components:
         `format=json` response shape. `index` is always present; one
         additional array-valued key per resolved variable (see
         `variables`/`use_case` on the parent operation), e.g. `T`/`GHI`/
-        `DHI`/`DNI` for the default `solar` use_case, or `WS_10M`/
-        `U_10M`/`V_10M` for `wind`. `null` entries (rather than a bare
+        `DHI`/`DNI` for `use_case=solar`, or `WS_10M`/`U_10M`/`V_10M`
+        for `use_case=wind`. `null` entries (rather than a bare
         `NaN` token, which is invalid JSON and would break a strict
         decoder like Go's `encoding/json`) mark hours where the source
         archive has no value -- real, not hypothetical: e.g.
