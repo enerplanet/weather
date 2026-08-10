@@ -31,6 +31,13 @@ info:
     `use_case=solar` when neither is given, matching every caller's
     behavior before these params existed.
 
+    ## Typical workflow
+
+    1. `GET /v1/weather/variables` -- see what's queryable.
+    2. `GET /v1/weather/point?provider=merra-2&lat=48.2&lon=16.4&year=2018&use_case=wind`
+       -- same `lat`/`lon`/`year` you're always querying for, plus
+       whatever `use_case` or `variables` step 1 told you to use.
+
     Runs under gunicorn in Docker (`infrastructure/container/
     docker-compose.serve.yml`, `PIPELINE_MODE=serve`), in its own
     `weather` Compose namespace -- deliberately not joined to any one
@@ -197,23 +204,28 @@ paths:
           required: false
           description: |
             Shorthand for a named variable set -- see `GET
-            /v1/weather/variables` for the full, current list and each
-            use_case's members. At most one of `variables`/`use_case`
-            may be given; defaults to `solar` if neither is given.
+            /v1/weather/variables` for each use_case's members. At most
+            one of `variables`/`use_case` may be given; defaults to
+            `solar` if neither is given.
           schema:
             type: string
-            example: solar
+            enum: [solar, wind]
         - name: variables
           in: query
           required: false
+          style: form
+          explode: false
           description: |
-            Comma-separated exact variable names, e.g. `T,WS_10M` -- an
-            escape hatch for a combination no `use_case` covers. See
-            `GET /v1/weather/variables` for valid names. At most one of
+            Exact variable names -- an escape hatch for a combination
+            no `use_case` covers. See `GET /v1/weather/variables` for
+            each one's unit/description. At most one of
             `variables`/`use_case` may be given.
           schema:
-            type: string
-            example: "T,GHI,DHI,DNI"
+            type: array
+            items:
+              type: string
+              enum: [T, GHI, DHI, DNI, WS_10M, U_10M, V_10M]
+            example: [T, GHI, DHI, DNI]
       responses:
         "200":
           description: |

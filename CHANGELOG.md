@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- `docs/openapi.yaml`: `use_case`/`variables` now render as selectable
+  options (enum), same as `provider` already did, instead of free-text
+  fields. Added a concrete "discover, then query" workflow example.
+  New test (`test_openapi_sync.py`) keeps these enums from silently
+  drifting from the `weather.variables` registry -- no build step
+  connects the two otherwise.
+
 ### Changed
 
 - **Breaking**: `GET /v1/health` no longer returns `providers` -- it's
