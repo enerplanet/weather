@@ -31,6 +31,7 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from flask import Flask, Response, jsonify, request
 
 logger = logging.getLogger(__name__)
@@ -38,30 +39,16 @@ logger = logging.getLogger(__name__)
 
 @functools.lru_cache(maxsize=int(os.environ.get("WEATHER_API_CACHE_SIZE", "256")))
 def _cached_point_weather(provider: str, latitude: float, longitude: float, year: int):
-    """Cached wrapper over ``get_point_weather`` -- safe to cache forever.
+    """Return the point weather timeseries, cached per (provider, lat, lon, year).
 
-    Unlike most caches, this one has no staleness problem: a processed
-    archive for (provider, latitude, longitude, year) is immutable once
-    built (barring a deliberate pipeline re-run, which is a rare, manual
-    event, not something this cache needs to detect). No TTL, no
-    invalidation logic -- just reuse by key for the life of the process.
+    Returns a DataFrame indexed on ``time`` with T/GHI/DNI/DHI columns.
+    Raises whatever ``get_point_weather`` raises; failures are not cached,
+    since ``lru_cache`` stores return values only.
 
-    Exists because the underlying call is genuinely expensive per request
-    -- opening the archive file(s) plus live DISC/DIRINT DNI/DHI
-    reconstruction over the full timeseries, not a cheap lookup (see
-    point_query.py's own module docstring) -- and multiple consumers
-    (buem-gateway today, other tech-specific gateways later) querying the
-    same location/year would otherwise each pay that cost independently.
-
-    In-memory and per-process, same caveat as the rate limiter below: correct
-    for a single dev-server process, not for a multi-worker production
-    deployment (would need a shared cache, e.g. Redis, at that point --
-    `WEATHER_API_CACHE_SIZE` only bounds one worker's own cache).
-
-    A failed lookup (``FileNotFoundError`` etc.) is never cached --
-    ``lru_cache`` only caches a function's return value, not an exception
-    it raised, so a location with no archive yet keeps retrying on every
-    call rather than caching the failure.
+    Cached without TTL because a processed archive is immutable once built.
+    The underlying call is expensive (archive open plus DISC/DIRINT DNI/DHI
+    reconstruction, see ``point_query.py``) and multiple gateways query the
+    same key.
     """
     from weather import get_point_weather
 
@@ -217,6 +204,31 @@ def create_app() -> Flask:
             # a bad request or a crash -- surface them as such instead
             # of falling through to Flask's generic unhelpful 500.
             return jsonify(error=str(exc)), 503
+
+        if request.args.get("format", "parquet").lower() == "json":
+            # JSON mode: same cached DataFrame, shaped to match buem's own
+            # WeatherConfig dict format directly (index/T/GHI/DNI/DHI) --
+            # see buem/src/buem/config/cfg_building.py::WeatherConfig --
+            # so a Go (or any) caller can decode straight into the request
+            # payload it already builds, no parquet-parsing dependency
+            # needed just to consume this one endpoint.
+            # NaN -> None so this serializes as JSON `null`, not the bare
+            # `NaN` token Python's json module emits by default -- that
+            # token is invalid JSON and a strict decoder (e.g. Go's
+            # encoding/json) rejects the whole response outright. Real,
+            # not hypothetical: ERA5-Land's boundary-repaired archive-start
+            # hour is exactly this case (see docs/COUNTRY_SCOPED_ARCHIVES.md).
+            def _col(name: str) -> list:
+                return [None if pd.isna(v) else float(v) for v in out[name]]
+
+            out = df.reset_index()
+            return jsonify(
+                index=[ts.isoformat() for ts in out["time"]],
+                T=_col("T"),
+                GHI=_col("GHI"),
+                DHI=_col("DHI"),
+                DNI=_col("DNI"),
+            )
 
         buf = io.BytesIO()
         df.reset_index().to_parquet(buf, index=False)
