@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `weather.variables` -- canonical registry of every variable
+  `get_point_weather()`/`weather serve` can return (name, unit,
+  description) and the named `use_case` shortcuts that group them
+  (`solar`: T/GHI/DHI/DNI, `wind`: WS_10M/U_10M/V_10M). `get_point_weather()`
+  and `GET /v1/weather/point` both gain `variables`/`use_case` params
+  (at most one). New `GET /v1/weather/variables` discovery endpoint.
+  See #5.
+
+### Changed
+
+- `point_query.py`'s per-provider extraction (`_get_point_regular_grid`,
+  `_get_point_cosmo_rea6`) now conditionally pulls only the requested
+  variables -- e.g. a wind-only query skips the pvlib DNI/DHI
+  reconstruction entirely. Defaults to the `solar` use_case
+  (T/GHI/DHI/DNI) when neither `variables` nor `use_case` is given,
+  matching every existing caller's behavior before these params existed.
+- `weather serve`'s in-process response cache key now includes the
+  resolved variables tuple, not just (provider, lat, lon, year) -- a
+  wind query and a solar query for the same location/year no longer
+  collide in the cache.
+
 ## [1.8.0] - 2026-08-06
 
 ### Fixed

@@ -32,6 +32,11 @@ def client(monkeypatch):
 
 
 def _fake_weather_df() -> pd.DataFrame:
+    """All queryable columns -- the route's own `variables` resolution
+    selects the requested subset, matching real get_point_weather
+    behavior closely enough to test the HTTP layer without needing real
+    archive data (see test_point_query.py for the real extraction path).
+    """
     index = pd.date_range("2018-01-01", periods=3, freq="h", tz=None, name="time")
     return pd.DataFrame(
         {
@@ -39,6 +44,9 @@ def _fake_weather_df() -> pd.DataFrame:
             "GHI": [0.0, 100.0, 200.0],
             "DHI": [0.0, 50.0, 60.0],
             "DNI": [0.0, 300.0, 400.0],
+            "WS_10M": [3.0, 4.0, 5.0],
+            "U_10M": [1.0, 1.5, 2.0],
+            "V_10M": [2.0, 2.5, 3.0],
         },
         index=index,
     )
@@ -47,7 +55,11 @@ def _fake_weather_df() -> pd.DataFrame:
 def _patch_get_point_weather(monkeypatch):
     import weather
 
-    monkeypatch.setattr(weather, "get_point_weather", lambda *a, **kw: _fake_weather_df())
+    def _fake(*args, **kwargs):
+        variables = kwargs.get("variables") or ("T", "GHI", "DHI", "DNI")
+        return _fake_weather_df()[list(variables)]
+
+    monkeypatch.setattr(weather, "get_point_weather", _fake)
 
 
 def test_weather_point_json_format(client, monkeypatch):
@@ -76,4 +88,64 @@ def test_weather_point_default_format_is_parquet(client, monkeypatch):
 def test_weather_point_requires_api_key(client, monkeypatch):
     _patch_get_point_weather(monkeypatch)
     resp = client.get("/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018")
+    assert resp.status_code == 401
+
+
+def test_weather_point_use_case_wind(client, monkeypatch):
+    _patch_get_point_weather(monkeypatch)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018"
+        "&use_case=wind&format=json",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert set(body) == {"index", "WS_10M", "U_10M", "V_10M"}
+    assert body["WS_10M"] == [3.0, 4.0, 5.0]
+
+
+def test_weather_point_variables_subset(client, monkeypatch):
+    _patch_get_point_weather(monkeypatch)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018"
+        "&variables=WS_10M,T&format=json",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert set(body) == {"index", "WS_10M", "T"}
+
+
+def test_weather_point_unknown_use_case_is_400(client, monkeypatch):
+    _patch_get_point_weather(monkeypatch)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018&use_case=hydro",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 400
+    assert "hydro" in resp.get_json()["error"]
+
+
+def test_weather_point_both_variables_and_use_case_is_400(client, monkeypatch):
+    _patch_get_point_weather(monkeypatch)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018"
+        "&variables=T&use_case=solar",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 400
+    assert "at most one" in resp.get_json()["error"]
+
+
+def test_weather_variables_discovery_endpoint(client):
+    resp = client.get("/v1/weather/variables", headers={"X-API-Key": API_KEY})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["variables"]["WS_10M"]["unit"] == "m/s"
+    assert body["use_cases"]["solar"] == ["T", "GHI", "DHI", "DNI"]
+    assert body["use_cases"]["wind"] == ["WS_10M", "U_10M", "V_10M"]
+
+
+def test_weather_variables_discovery_requires_api_key(client):
+    resp = client.get("/v1/weather/variables")
     assert resp.status_code == 401

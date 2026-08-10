@@ -101,7 +101,9 @@ class TestDniReconstruction:
 class TestGetPointWeatherRegularGrid:
     """ERA5-Land/MERRA-2-shaped archives: y/x dims, 1-D lat/lon aux coords."""
 
-    def _write_archive(self, tmp_path, subdir, filename, hourly_times, pressure_var):
+    def _write_archive(
+        self, tmp_path, subdir, filename, hourly_times, pressure_var, with_wind=False
+    ):
         lat_vals = np.array([50.0, 50.1, 50.2])
         lon_vals = np.array([4.0, 4.1, 4.2])
         shape = (len(hourly_times), 3, 3)
@@ -109,12 +111,18 @@ class TestGetPointWeatherRegularGrid:
         t = 15 + np.zeros(shape)
         pres = 101000 + np.zeros(shape)
 
+        data_vars = {
+            "GHI": (("time", "y", "x"), ghi),
+            "T": (("time", "y", "x"), t),
+            pressure_var: (("time", "y", "x"), pres),
+        }
+        if with_wind:
+            data_vars["U_10M"] = (("time", "y", "x"), 3.0 + np.zeros(shape))
+            data_vars["V_10M"] = (("time", "y", "x"), 2.0 + np.zeros(shape))
+            data_vars["WS_10M"] = (("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape))
+
         ds = xr.Dataset(
-            {
-                "GHI": (("time", "y", "x"), ghi),
-                "T": (("time", "y", "x"), t),
-                pressure_var: (("time", "y", "x"), pres),
-            },
+            data_vars,
             coords={
                 "time": hourly_times,
                 "y": np.arange(3),
@@ -154,6 +162,51 @@ class TestGetPointWeatherRegularGrid:
         out_dir.mkdir(parents=True)
         with pytest.raises(FileNotFoundError):
             get_point_weather(50.0, 4.0, 2018, provider="era5-land", data_dir=out_dir)
+
+    def test_wind_use_case(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times,
+            "sp", with_wind=True,
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="wind"
+        )
+        assert list(df.columns) == ["WS_10M", "U_10M", "V_10M"]
+        assert not df.isna().any().any()
+
+    def test_variables_subset_and_order(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times,
+            "PS", with_wind=True,
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="merra2", data_dir=out_dir,
+            variables="WS_10M,T",
+        )
+        # Column order follows the request, not the archive's own order.
+        assert list(df.columns) == ["WS_10M", "T"]
+
+    def test_wind_variable_missing_from_archive_raises_keyerror(
+        self, tmp_path, hourly_times
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times,
+            "sp", with_wind=False,
+        )
+        with pytest.raises(KeyError, match="WS_10M"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="wind"
+            )
+
+    def test_both_variables_and_use_case_raises(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times, "sp"
+        )
+        with pytest.raises(ValueError, match="at most one"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir,
+                variables="T", use_case="solar",
+            )
 
 
 class TestGetPointWeatherCosmo:
@@ -209,3 +262,37 @@ class TestGetPointWeatherCosmo:
 
         with pytest.raises(KeyError):
             get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+
+    def test_cosmo_wind_use_case(self, tmp_path, hourly_times) -> None:
+        lat_2d = np.array(
+            [[50.0, 50.1, 50.2], [50.05, 50.15, 50.25], [50.1, 50.2, 50.3]]
+        )
+        lon_2d = np.array(
+            [[4.0, 4.05, 4.1], [4.1, 4.15, 4.2], [4.2, 4.25, 4.3]]
+        )
+        shape = (len(hourly_times), 3, 3)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+                "U_10M": (("time", "y", "x"), 3.0 + np.zeros(shape)),
+                "V_10M": (("time", "y", "x"), 2.0 + np.zeros(shape)),
+                "WS_10M": (("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(3),
+                "x": np.arange(3),
+                "latitude": (("y", "x"), lat_2d),
+                "longitude": (("y", "x"), lon_2d),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")
+
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="wind"
+        )
+        assert list(df.columns) == ["WS_10M", "U_10M", "V_10M"]
+        assert not df.isna().any().any()

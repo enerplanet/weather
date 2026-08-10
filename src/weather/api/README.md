@@ -1,7 +1,7 @@
-# Point-query HTTP API (scaffold)
+# Point-query HTTP API
 
-**Status: scaffold, 2026-08-04. Not deployed, not wired into this repo's CI,
-not committed/pushed without review.**
+**Status: deployed via Docker (`infrastructure/container/docker-compose.serve.yml`,
+`weather` namespace). Not wired into this repo's own CI/packaging defaults.**
 
 ## Why this exists
 
@@ -17,13 +17,23 @@ while callers outside it never need filesystem or bulk access.
 `GET /v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018`
 → `weather.get_point_weather(latitude, longitude, year, provider=provider)`,
 returned as a parquet-encoded body (`application/octet-stream`; the reset
-index column is first, then `T`/`GHI`/`DHI`/`DNI`).
+index column is first, then one column per resolved variable, in order).
 
 Add `&format=json` to get the same data as a JSON body instead
-(`{"index": [...], "T": [...], "GHI": [...], "DHI": [...], "DNI": [...]}`,
-shaped to match buem's `WeatherConfig` dict directly) — for a caller that
-doesn't want a parquet-parsing dependency just to consume this endpoint.
-`NaN` values serialize as JSON `null`.
+(`{"index": [...], "T": [...], ...}`, one key per resolved variable,
+shaped to match buem's `WeatherConfig` dict directly for the default
+`solar` use_case) — for a caller that doesn't want a parquet-parsing
+dependency just to consume this endpoint. `NaN` values serialize as JSON
+`null`.
+
+By default this returns temperature/irradiance (`T`/`GHI`/`DHI`/`DNI`,
+the `solar` use_case). Add `&use_case=wind` for wind
+(`WS_10M`/`U_10M`/`V_10M`), or `&variables=T,WS_10M` to name exact
+variables directly (at most one of `variables`/`use_case`; see
+`weather.variables` for the full registry). `GET /v1/weather/variables`
+lists every variable's name/unit/description and every `use_case`'s
+members, so a caller doesn't need to already know the meteorological
+variable names.
 
 `GET /v1/health` → per-provider list of years with a processed archive,
 derived from filenames already on disk. Deliberately does not expose a raw
@@ -52,6 +62,8 @@ deployment (would need a shared store, e.g. redis, at that point).
 
 ## Running it
 
+Local dev server:
+
 ```bash
 pip install -e ".[api,pointquery,solar,parquet]"
 export WEATHER_API_KEYS="dev-key-change-me"
@@ -59,22 +71,42 @@ weather serve --host 127.0.0.1 --port 8080
 ```
 
 `weather serve` runs Flask's dev server — fine for local testing, **not**
-for production (no concurrency, no TLS). A real deployment should run this
-app under gunicorn/similar, same as buem's own `infrastructure/container/`
-does for its API.
+for production (no concurrency, no TLS).
 
-## buem-side integration
+Docker (gunicorn, matches buem's own `infrastructure/container/` shape for
+its API):
 
-`buem`'s `weather_cache.py::get_or_fetch_weather()` has a matching remote
-branch, gated by `WEATHER_API_URL`/`WEATHER_API_KEY` — see that repo's own
-scaffold changes. Unset (the default), buem's behavior is entirely
-unchanged (local `data_dir`/archive path, exactly as today).
+```bash
+export WEATHER_API_KEYS="dev-key-change-me"   # in .env, or shell export
+docker compose -f infrastructure/container/docker-compose.serve.yml \
+    up -d --build
+```
+
+Runs in its own `weather` Compose namespace, deliberately not joined to
+any one consumer's namespace (e.g. `building-simulation`) — this service
+has more than one downstream consumer in mind (BuEM today, PV/wind
+named as future ones). A consumer in a different Compose project reaches
+it via its published host port (`WEATHER_API_PORT`, default 8090) — see
+the compose file's own header comment for the `host.docker.internal`
+pattern.
+
+## Consumer integration
+
+Per `decisions/2026-08-07-buem-weather-access-architecture.md` (private
+vault, not in this repo): **no service calls this API directly.** The
+only sanctioned caller is a future Orchestrator, which resolves weather
+and hands it to BuEM (and other model services) as part of the request
+it already builds — BuEM's own `/api/process` accepts a pre-resolved
+`buem.weather` block for exactly this (see `enerplanet/buem#10`). Neither
+`buem-gateway` nor BuEM itself fetches from this API — confirmed
+directly by the Orchestrator's own developer, not inferred.
 
 ## Still open before this can be real (not decided here)
 
 - Where this actually runs relative to the data host (on `sd26` itself vs.
-  a small gateway host) and how buem's production egress reaches it —
-  needs the IT conversation flagged in buem's CLAUDE.md, not a code change.
-- `cosmo-rea6`/`era5-land` health/point-query support is already wired
-  (same `get_point_weather` call, provider-agnostic) but untested against
-  real archives for those two providers as of this scaffold.
+  a small gateway host) and how the Orchestrator's production egress
+  reaches it — needs the IT conversation flagged in buem's CLAUDE.md, not
+  a code change.
+- The Orchestrator itself doesn't exist in code yet, so nothing calls this
+  API in production today — this is architectural placement, not a
+  working integration.

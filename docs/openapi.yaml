@@ -6,7 +6,7 @@ info:
   description: |
     Thin HTTP interface over `weather.get_point_weather()`: given a
     (provider, latitude, longitude, year), returns already-processed
-    hourly temperature and irradiance for the nearest grid cell.
+    hourly weather for the requested variables at the nearest grid cell.
 
     Built for one specific gap: this repo's processed archives live on a
     university server behind VPN. A request-serving container (e.g. a
@@ -19,12 +19,30 @@ info:
     file listing, no bulk/archive download. See
     `src/weather/api/README.md` for the full design rationale.
 
-    **Status: scaffold.** Not deployed. The reference implementation
-    (`weather serve`) runs Flask's dev server — fine for local testing,
-    not for production (no concurrency, no TLS, in-memory rate limiter
-    only correct for a single process). A real deployment runs this
-    under gunicorn/similar behind a reverse proxy, the same shape as
-    `buem-model`/`buem-gateway`.
+    ## Choosing what you need
+
+    Solar (`T`/`GHI`/`DHI`/`DNI`) and wind (`WS_10M`/`U_10M`/`V_10M`) are
+    both queryable -- pick a technology shorthand with `use_case=solar`
+    or `use_case=wind`, or name exact variables directly with
+    `variables=T,WS_10M`. Not sure what's available? `GET
+    /v1/weather/variables` first -- it lists every variable's unit and
+    description, and every `use_case`'s member list, so a caller doesn't
+    need to already know the meteorological variable names. Defaults to
+    `use_case=solar` when neither is given, matching every caller's
+    behavior before these params existed.
+
+    Runs under gunicorn in Docker (`infrastructure/container/
+    docker-compose.serve.yml`, `PIPELINE_MODE=serve`), in its own
+    `weather` Compose namespace -- deliberately not joined to any one
+    consumer's namespace (e.g. `building-simulation`), since this
+    service has more than one downstream consumer in mind. In-process
+    rate limiter and response cache are per-worker/per-container, not
+    shared across replicas -- correct today (fine to run behind a
+    load-balanced reverse proxy with N identical replicas if scale
+    requires: the underlying archives are immutable, so a cache miss
+    on one replica costs a bit more, never wrong data), would need a
+    shared store (e.g. Redis) only if request-level rate limiting must
+    be exact *across* replicas.
 
     ## Authentication
 
@@ -50,6 +68,11 @@ info:
 servers:
   - url: http://127.0.0.1:8080
     description: Local dev server (`weather serve --host 127.0.0.1 --port 8080`)
+  - url: http://127.0.0.1:8090
+    description: |
+      Docker (`docker compose -f infrastructure/container/
+      docker-compose.serve.yml up -d --build`), host port from
+      `WEATHER_API_PORT` (default 8090), container listens on 8080
 
 tags:
   - name: Health
@@ -135,20 +158,72 @@ paths:
           required: true
           schema:
             type: integer
+        - name: format
+          in: query
+          required: false
+          description: |
+            `parquet` (default): compact binary, requires a Parquet
+            reader (e.g. `pyarrow`) to decode -- cheap for a caller
+            that already depends on pandas. `json`: no dependency
+            beyond a standard JSON decoder, ~2x larger on the wire for
+            a year of hourly data -- for a caller (e.g. a Go service)
+            where adding a Parquet reader isn't worth it just for this
+            one endpoint.
+          schema:
+            type: string
+            enum: [parquet, json]
+            default: parquet
+        - name: use_case
+          in: query
+          required: false
+          description: |
+            Shorthand for a named variable set -- see `GET
+            /v1/weather/variables` for the full, current list and each
+            use_case's members. At most one of `variables`/`use_case`
+            may be given; defaults to `solar` if neither is given.
+          schema:
+            type: string
+            example: solar
+        - name: variables
+          in: query
+          required: false
+          description: |
+            Comma-separated exact variable names, e.g. `T,WS_10M` -- an
+            escape hatch for a combination no `use_case` covers. See
+            `GET /v1/weather/variables` for valid names. At most one of
+            `variables`/`use_case` may be given.
+          schema:
+            type: string
+            example: "T,GHI,DHI,DNI"
       responses:
         "200":
           description: |
-            Parquet-encoded hourly DataFrame. Columns, in order: the
-            reset DatetimeIndex (tz-naive, hourly), then `T` (degC),
-            `GHI`, `DHI`, `DNI` (all W/m^2). 8760 rows (8784 in a leap
-            year).
+            Same underlying data, shaped by `format`. 8760 rows (8784
+            in a leap year), one column per resolved variable (see
+            `variables`/`use_case` above), in the order requested.
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
+                description: |
+                  `format=parquet` (default). Columns, in order: the
+                  reset DatetimeIndex (tz-naive, hourly), then one
+                  column per resolved variable, in the order requested.
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WeatherPointJSON"
+              example:
+                index: ["2018-01-01T00:30:00", "2018-01-01T01:30:00"]
+                T: [0.89, 0.72]
+                GHI: [0.0, 0.0]
+                DNI: [0.0, 0.0]
+                DHI: [0.0, 0.0]
         "400":
-          description: Missing/non-numeric lat, lon, year, or missing provider
+          description: |
+            Missing/non-numeric lat, lon, year, or missing provider; or
+            an unknown `variables`/`use_case` value, or both given
+            together (see `GET /v1/weather/variables` for valid names).
           content:
             application/json:
               schema:
@@ -166,13 +241,50 @@ paths:
         "503":
           description: |
             Archive exists but isn't in a servable state — an
-            unrepaired ERA5-Land boundary month, or a file that
-            predates the lat/lon-retention convention. A real
+            unrepaired ERA5-Land boundary month, a file that predates
+            the lat/lon-retention convention, or a requested variable
+            (e.g. wind) this archive predates the export of. A real
             server-side data problem, not a bad request.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/weather/variables:
+    get:
+      tags: [Weather]
+      summary: Discover queryable variables and use_case shortcuts
+      description: |
+        Static registry: name, unit, and description for every variable
+        `GET /v1/weather/point` can return, plus the `use_case`
+        shortcuts that group them. Query this first if you don't
+        already know which variable names or use_case to ask for.
+      operationId: getWeatherVariables
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VariablesResponse"
+              example:
+                variables:
+                  T:
+                    unit: degC
+                    description: Air temperature at 2m
+                  GHI:
+                    unit: W/m2
+                    description: Global horizontal irradiance
+                  WS_10M:
+                    unit: m/s
+                    description: "Scalar wind speed at 10m, sqrt(U_10M^2 + V_10M^2)"
+                use_cases:
+                  solar: [T, GHI, DHI, DNI]
+                  wind: [WS_10M, U_10M, V_10M]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
 components:
   securitySchemes:
@@ -202,6 +314,54 @@ components:
       properties:
         error:
           type: string
+
+    WeatherPointJSON:
+      type: object
+      description: |
+        `format=json` response shape. `index` is always present; one
+        additional array-valued key per resolved variable (see
+        `variables`/`use_case` on the parent operation), e.g. `T`/`GHI`/
+        `DHI`/`DNI` for the default `solar` use_case, or `WS_10M`/
+        `U_10M`/`V_10M` for `wind`. `null` entries (rather than a bare
+        `NaN` token, which is invalid JSON and would break a strict
+        decoder like Go's `encoding/json`) mark hours where the source
+        archive has no value -- real, not hypothetical: e.g.
+        ERA5-Land's boundary-repaired archive-start hour.
+      required: [index]
+      properties:
+        index:
+          type: array
+          items:
+            type: string
+            format: date-time
+      additionalProperties:
+        type: array
+        items:
+          type: number
+          nullable: true
+
+    VariablesResponse:
+      type: object
+      required: [variables, use_cases]
+      properties:
+        variables:
+          type: object
+          description: Canonical variable name -> its unit and description.
+          additionalProperties:
+            type: object
+            required: [unit, description]
+            properties:
+              unit:
+                type: string
+              description:
+                type: string
+        use_cases:
+          type: object
+          description: use_case shortcut name -> its member variable names, in order.
+          additionalProperties:
+            type: array
+            items:
+              type: string
 
     HealthResponse:
       type: object

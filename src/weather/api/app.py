@@ -4,9 +4,15 @@ Built for one specific gap: buem's production deployment cannot reach the
 processed archives on this repo's data host directly (VPN-protected
 university network; a request-serving container can't join a human VPN
 client the way a developer does). This exposes exactly one operation --
-(provider, latitude, longitude, year) -> hourly T/GHI/DHI/DNI -- over HTTP,
-so a service running on/near the data host can sit inside the network
-boundary while callers outside it never need filesystem or bulk access.
+(provider, latitude, longitude, year) -> hourly weather for the requested
+variables -- over HTTP, so a service running on/near the data host can sit
+inside the network boundary while callers outside it never need
+filesystem or bulk access. Defaults to T/GHI/DHI/DNI (the "solar" use
+case, matching every caller's behavior before the variables/use_case
+params existed) -- see weather.variables for the full registry (also
+exposed at GET /v1/weather/variables) and point_query.py for why wind is
+preprocessed but wasn't queryable through this API until those params
+were added.
 
 Deliberately narrow: no file listing, no bulk/archive download, nothing
 beyond the single point-query already at the heart of weather's own public
@@ -38,12 +44,20 @@ logger = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=int(os.environ.get("WEATHER_API_CACHE_SIZE", "256")))
-def _cached_point_weather(provider: str, latitude: float, longitude: float, year: int):
-    """Return the point weather timeseries, cached per (provider, lat, lon, year).
+def _cached_point_weather(
+    provider: str, latitude: float, longitude: float, year: int, variables: tuple[str, ...]
+):
+    """Return the point weather timeseries, cached per
+    (provider, lat, lon, year, variables).
 
-    Returns a DataFrame indexed on ``time`` with T/GHI/DNI/DHI columns.
-    Raises whatever ``get_point_weather`` raises; failures are not cached,
-    since ``lru_cache`` stores return values only.
+    Returns a DataFrame indexed on ``time`` with one column per resolved
+    variable (see ``weather.variables``). Raises whatever
+    ``get_point_weather`` raises; failures are not cached, since
+    ``lru_cache`` stores return values only.
+
+    ``variables`` is part of the cache key -- a wind query and a solar
+    query for the same (provider, lat, lon, year) get separate entries,
+    never collide.
 
     Cached without TTL because a processed archive is immutable once built.
     The underlying call is expensive (archive open plus DISC/DIRINT DNI/DHI
@@ -52,7 +66,9 @@ def _cached_point_weather(provider: str, latitude: float, longitude: float, year
     """
     from weather import get_point_weather
 
-    return get_point_weather(latitude, longitude, year, provider=provider)
+    return get_point_weather(
+        latitude, longitude, year, provider=provider, variables=variables
+    )
 
 _PROVIDER_OUTPUT_DIR_GETTERS = {
     "merra-2": "merra2_output_dir",
@@ -175,8 +191,22 @@ def create_app() -> Flask:
                 providers[name] = {"error": str(exc)}
         return jsonify(status="ok", providers=providers)
 
+    @app.get("/v1/weather/variables")
+    def weather_variables() -> Any:
+        from weather.variables import USE_CASES, VARIABLES
+
+        return jsonify(
+            variables={
+                name: {"unit": spec.unit, "description": spec.description}
+                for name, spec in VARIABLES.items()
+            },
+            use_cases={name: list(members) for name, members in USE_CASES.items()},
+        )
+
     @app.get("/v1/weather/point")
     def weather_point() -> Any:
+        from weather.variables import resolve_variables
+
         provider = request.args.get("provider", "")
         try:
             latitude = float(request.args["lat"])
@@ -190,7 +220,15 @@ def create_app() -> Flask:
             return jsonify(error="provider is required"), 400
 
         try:
-            df = _cached_point_weather(provider, latitude, longitude, year)
+            variables = resolve_variables(
+                variables=request.args.get("variables"),
+                use_case=request.args.get("use_case"),
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+        try:
+            df = _cached_point_weather(provider, latitude, longitude, year, variables)
         except FileNotFoundError as exc:
             return jsonify(error=str(exc)), 404
         except ValueError as exc:
@@ -198,18 +236,20 @@ def create_app() -> Flask:
         except (RuntimeError, KeyError) as exc:
             # point_query.py raises these when the archive itself isn't
             # in a servable state for this query -- an unrepaired
-            # ERA5-Land boundary month (RuntimeError) or a file that
-            # predates the lat/lon-retention convention (KeyError).
-            # Both are real, actionable server-side data problems, not
+            # ERA5-Land boundary month (RuntimeError), a file that
+            # predates the lat/lon-retention convention, or a requested
+            # variable this archive predates the export of (KeyError).
+            # All are real, actionable server-side data problems, not
             # a bad request or a crash -- surface them as such instead
             # of falling through to Flask's generic unhelpful 500.
             return jsonify(error=str(exc)), 503
 
         if request.args.get("format", "parquet").lower() == "json":
             # JSON mode: same cached DataFrame, shaped to match buem's own
-            # WeatherConfig dict format directly (index/T/GHI/DNI/DHI) --
-            # see buem/src/buem/config/cfg_building.py::WeatherConfig --
-            # so a Go (or any) caller can decode straight into the request
+            # WeatherConfig dict format directly (index plus one key per
+            # requested variable) -- see
+            # buem/src/buem/config/cfg_building.py::WeatherConfig -- so a
+            # Go (or any) caller can decode straight into the request
             # payload it already builds, no parquet-parsing dependency
             # needed just to consume this one endpoint.
             # NaN -> None so this serializes as JSON `null`, not the bare
@@ -222,13 +262,9 @@ def create_app() -> Flask:
                 return [None if pd.isna(v) else float(v) for v in out[name]]
 
             out = df.reset_index()
-            return jsonify(
-                index=[ts.isoformat() for ts in out["time"]],
-                T=_col("T"),
-                GHI=_col("GHI"),
-                DHI=_col("DHI"),
-                DNI=_col("DNI"),
-            )
+            payload = {"index": [ts.isoformat() for ts in out["time"]]}
+            payload.update({name: _col(name) for name in variables})
+            return jsonify(**payload)
 
         buf = io.BytesIO()
         df.reset_index().to_parquet(buf, index=False)
