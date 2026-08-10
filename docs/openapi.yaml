@@ -4,75 +4,77 @@ info:
   title: weather point-query API
   version: 0.1.0
   description: |
-    Thin HTTP interface over `weather.get_point_weather()`: given a
-    (provider, latitude, longitude, year), returns already-processed
-    hourly weather for the requested variables at the nearest grid cell.
+    Hourly weather for a single location and year, read from
+    already-processed archives. Given a provider, latitude, longitude
+    and year, the API returns the nearest grid cell's hourly series for
+    the variables you ask for.
 
-    Built for one specific gap: this repo's processed archives live on a
-    university server behind VPN. A request-serving container (e.g. a
-    buem/PV/wind gateway) can't join that VPN the way a developer does.
-    This lets a small service running on/near the data host sit inside
-    the network boundary, while every other caller reaches it over plain
-    HTTP and never needs filesystem or bulk archive access.
+    The service exists because the processed archives sit behind a
+    university VPN that a request-serving container cannot join. This
+    API runs inside that network boundary so callers can reach the data
+    over plain HTTP without filesystem or bulk archive access.
 
-    Deliberately narrow: one point-query operation, nothing else. No
-    file listing, no bulk/archive download. See
-    `src/weather/api/README.md` for the full design rationale.
+    It does not download or process anything. The relevant provider
+    pipeline must already have run for the year you request.
 
-    ## Choosing what you need
+    ## Quick start
 
-    Solar (`T`/`GHI`/`DHI`/`DNI`) and wind (`WS_10M`/`U_10M`/`V_10M`) are
-    both queryable -- pick a technology shorthand with `use_case=solar`
-    or `use_case=wind`, or name exact variables directly with
-    `variables=T,WS_10M`. **Exactly one of these is required** -- no
-    default, so a caller that forgets to say what it needs gets a 400,
-    not a silent guess. Not sure what's available? `GET
-    /v1/weather/variables` first -- it lists every variable's unit and
-    description, and every `use_case`'s member list, so a caller doesn't
-    need to already know the meteorological variable names.
+    Every request needs an `X-API-Key` header.
 
-    ## Choosing a response format
+    1. `GET /v1/weather/variables` to see which variables exist and
+       which `use_case` shortcuts group them.
+    2. `GET /v1/weather/providers` to see which years each provider has.
+    3. `GET /v1/weather/point` for the data.
 
-    `format=parquet` (default) or `format=json` -- independent of
-    `use_case`/`variables`, controls how the *same* resolved data is
-    encoded on the wire. See "Choosing what you need" above for which
-    columns you get; this only decides the byte format they arrive in.
+    Example:
 
-    ## Typical workflow
+    `curl -H "X-API-Key: $KEY" "http://127.0.0.1:8080/v1/weather/point?provider=merra-2&lat=48.2&lon=16.4&year=2018&use_case=wind&format=json"`
 
-    1. `GET /v1/weather/variables` -- see what's queryable.
-    2. `GET /v1/weather/point?provider=merra-2&lat=48.2&lon=16.4&year=2018&use_case=wind&format=json`
-       -- same `lat`/`lon`/`year` you're always querying for, plus
-       whatever `use_case`/`variables` step 1 told you to use, plus
-       `format` for how you want it encoded.
+    ## Choosing variables
 
-    Runs under gunicorn in Docker (`infrastructure/container/
-    docker-compose.serve.yml`, `PIPELINE_MODE=serve`), in its own
-    `weather` Compose namespace -- deliberately not joined to any one
-    consumer's namespace (e.g. `building-simulation`), since this
-    service has more than one downstream consumer in mind. In-process
-    rate limiter and response cache are per-worker/per-container, not
-    shared across replicas -- correct today (fine to run behind a
-    load-balanced reverse proxy with N identical replicas if scale
-    requires: the underlying archives are immutable, so a cache miss
-    on one replica costs a bit more, never wrong data), would need a
-    shared store (e.g. Redis) only if request-level rate limiting must
-    be exact *across* replicas.
+    Pass exactly one of `use_case` or `variables`. There is no default:
+    a request with neither gets a 400 rather than a silent guess, and a
+    request with both is also a 400.
 
-    ## Authentication
+    - `use_case=solar` resolves to `T`, `GHI`, `DHI`, `DNI`
+    - `use_case=wind` resolves to `WS_10M`, `U_10M`, `V_10M`
+    - `variables=T,WS_10M` names them directly, for combinations no
+      `use_case` covers
 
-    Static API keys via `WEATHER_API_KEYS` (comma-separated), checked
-    against the `X-API-Key` header on every request. Not a substitute
-    for network-level restriction — pair with a firewall/IP allowlist
-    scoped to known caller egress.
+    `GET /v1/weather/variables` is the authoritative list of both.
+
+    ## Choosing a format
+
+    `format` is independent of which variables you get. It only decides
+    how the same data is encoded.
+
+    - `parquet` (default): compact binary, needs a Parquet reader such
+      as pyarrow. Cheap if you already depend on pandas.
+    - `json`: no dependency beyond a standard JSON decoder, roughly
+      twice the size on the wire for a year of hourly data. The right
+      choice for a Go or Node caller that would otherwise add a Parquet
+      reader for this one endpoint.
+
+    ## Errors
+
+    - `400` your request is wrong: bad or missing parameters, or the
+      `use_case`/`variables` rule above
+    - `401` missing or invalid `X-API-Key`
+    - `404` no archive exists for that provider and year
+    - `429` rate limit exceeded, see below
+    - `503` the archive exists but is not servable, which is a
+      server-side data problem rather than a bad request. Retrying the
+      same request will not help.
+
+    All error responses share the same shape: a JSON object with a
+    single `error` string.
 
     ## Rate limiting
 
-    Per-key fixed-window limit (`WEATHER_API_RATE_LIMIT`, default 60
-    req/min), guarding against many small point queries reconstructing
-    a bulk archive. In-memory and per-process: correct for a single dev
-    server, not for a multi-worker deployment (would need a shared
-    store, e.g. Redis).
+    Per-key fixed window, 60 requests per minute by default. The limit
+    guards against many small point queries being used to reconstruct a
+    bulk archive. Batch your locations rather than fanning out.
+
   license:
     name: MIT
     url: https://github.com/UU-BUEM/weather/blob/main/LICENSE
@@ -82,92 +84,36 @@ info:
 
 servers:
   - url: http://127.0.0.1:8080
-    description: Local dev server (`weather serve --host 127.0.0.1 --port 8080`)
+    description: Local dev server
   - url: http://127.0.0.1:8090
-    description: |
-      Docker (`docker compose -f infrastructure/container/
-      docker-compose.serve.yml up -d --build`), host port from
-      `WEATHER_API_PORT` (default 8090), container listens on 8080
+    description: Docker, host port set by WEATHER_API_PORT
 
 tags:
-  - name: Health
-    description: Liveness and archive-availability check
   - name: Weather
-    description: Single-location point query
+    description: Point queries and discovery
+  - name: Health
+    description: Liveness check
 
 security:
   - ApiKeyAuth: []
 
 paths:
-  /v1/health:
-    get:
-      tags: [Health]
-      summary: Liveness check
-      description: No filesystem I/O -- see /v1/weather/providers for archive availability.
-      operationId: getHealth
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthResponse"
-              example:
-                status: ok
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "503":
-          description: Server misconfigured (no API keys set)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
-  /v1/weather/providers:
-    get:
-      tags: [Weather]
-      summary: Per-provider archive availability
-      description: |
-        Years with a processed archive for each provider, inferred from
-        filenames already on disk. Deliberately does not expose a raw
-        directory listing.
-      operationId: getWeatherProviders
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProvidersResponse"
-              example:
-                providers:
-                  era5-land:
-                    years: [2018, 2019]
-                  cosmo-rea6:
-                    years: [2018]
-                  merra-2:
-                    years: [2018]
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-
   /v1/weather/point:
     get:
       tags: [Weather]
-      summary: Hourly weather at one location/year
+      summary: Hourly weather at one location and year
       description: |
-        Extracts the nearest already-processed grid cell's hourly
-        temperature and irradiance for one (provider, latitude,
-        longitude, year). Does not download or process data — the
-        relevant provider pipeline must already have run for that year.
+        Returns the nearest processed grid cell's hourly series for the
+        requested variables.
+
+        Pass exactly one of `use_case` or `variables`. Passing neither
+        or both returns 400.
       operationId: getWeatherPoint
       parameters:
         - name: provider
           in: query
           required: true
+          description: Which reanalysis archive to read from.
           schema:
             type: string
             enum: [era5-land, cosmo-rea6, merra-2]
@@ -179,6 +125,7 @@ paths:
             format: double
             minimum: -90
             maximum: 90
+          example: 48.2
         - name: lon
           in: query
           required: true
@@ -187,33 +134,18 @@ paths:
             format: double
             minimum: -180
             maximum: 180
+          example: 16.4
         - name: year
           in: query
           required: true
+          description: Must have a processed archive, see /v1/weather/providers.
           schema:
             type: integer
-        - name: format
-          in: query
-          required: false
-          description: |
-            `parquet` (default): compact binary, requires a Parquet
-            reader (e.g. `pyarrow`) to decode -- cheap for a caller
-            that already depends on pandas. `json`: no dependency
-            beyond a standard JSON decoder, ~2x larger on the wire for
-            a year of hourly data -- for a caller (e.g. a Go service)
-            where adding a Parquet reader isn't worth it just for this
-            one endpoint.
-          schema:
-            type: string
-            enum: [parquet, json]
-            default: parquet
+          example: 2018
         - name: use_case
           in: query
           required: false
-          description: |
-            Shorthand for a named variable set -- see `GET
-            /v1/weather/variables` for each use_case's members. Exactly
-            one of `variables`/`use_case` is required -- no default.
+          description: Named variable set. Mutually exclusive with `variables`.
           schema:
             type: string
             enum: [solar, wind]
@@ -222,32 +154,35 @@ paths:
           required: false
           style: form
           explode: false
-          description: |
-            Exact variable names -- an escape hatch for a combination
-            no `use_case` covers. See `GET /v1/weather/variables` for
-            each one's unit/description. Exactly one of `variables`/
-            `use_case` is required -- no default.
+          description: Explicit variable names. Mutually exclusive with `use_case`.
           schema:
             type: array
             items:
               type: string
               enum: [T, GHI, DHI, DNI, WS_10M, U_10M, V_10M]
-            example: [T, GHI, DHI, DNI]
+          example: [T, GHI, DHI, DNI]
+        - name: format
+          in: query
+          required: false
+          description: Wire encoding only. Does not change which variables you get.
+          schema:
+            type: string
+            enum: [parquet, json]
+            default: parquet
       responses:
         "200":
           description: |
-            Same underlying data, shaped by `format`. 8760 rows (8784
-            in a leap year), one column per resolved variable (see
-            `variables`/`use_case` above), in the order requested.
+            8760 rows, or 8784 in a leap year. One column per resolved
+            variable, in the order requested.
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
                 description: |
-                  `format=parquet` (default). Columns, in order: the
-                  reset DatetimeIndex (tz-naive, hourly), then one
-                  column per resolved variable, in the order requested.
+                  `format=parquet`. Columns in order: the reset
+                  DatetimeIndex (tz-naive, hourly), then one column per
+                  resolved variable.
             application/json:
               schema:
                 $ref: "#/components/schemas/WeatherPointJSON"
@@ -258,19 +193,11 @@ paths:
                 DNI: [0.0, 0.0]
                 DHI: [0.0, 0.0]
         "400":
-          description: |
-            Missing/non-numeric lat, lon, year, or missing provider; or
-            neither `variables` nor `use_case` given, an unknown value
-            for either, or both given together (see `GET
-            /v1/weather/variables` for valid names).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
-          description: No processed archive for (provider, year) at this data_dir
+          description: No processed archive for this provider and year.
           content:
             application/json:
               schema:
@@ -279,11 +206,10 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "503":
           description: |
-            Archive exists but isn't in a servable state — an
-            unrepaired ERA5-Land boundary month, a file that predates
-            the lat/lon-retention convention, or a requested variable
-            (e.g. wind) this archive predates the export of. A real
-            server-side data problem, not a bad request.
+            Archive exists but is not servable: an unrepaired ERA5-Land
+            boundary month, a file predating the lat/lon retention
+            convention, or a requested variable this archive predates.
+            Server-side data problem, not a bad request.
           content:
             application/json:
               schema:
@@ -292,12 +218,11 @@ paths:
   /v1/weather/variables:
     get:
       tags: [Weather]
-      summary: Discover queryable variables and use_case shortcuts
+      summary: List queryable variables and use_case shortcuts
       description: |
-        Static registry: name, unit, and description for every variable
-        `GET /v1/weather/point` can return, plus the `use_case`
-        shortcuts that group them. Query this first if you don't
-        already know which variable names or use_case to ask for.
+        Static registry of every variable `/v1/weather/point` can
+        return, with unit and description, plus the `use_case`
+        shortcuts that group them.
       operationId: getWeatherVariables
       responses:
         "200":
@@ -325,6 +250,65 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
+  /v1/weather/providers:
+    get:
+      tags: [Weather]
+      summary: Which years each provider has
+      description: |
+        Years with a processed archive per provider, inferred from
+        filenames on disk. Not a directory listing.
+
+        A provider may report an `error` string instead of `years` if
+        its archive location cannot be read.
+      operationId: getWeatherProviders
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProvidersResponse"
+              example:
+                providers:
+                  era5-land:
+                    years: [2018, 2019]
+                  cosmo-rea6:
+                    years: [2018]
+                  merra-2:
+                    years: [2018]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /v1/health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: |
+        Does no filesystem I/O. Use /v1/weather/providers to check
+        whether archives are actually available.
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Server misconfigured, no API keys set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   securitySchemes:
     ApiKeyAuth:
@@ -333,14 +317,22 @@ components:
       name: X-API-Key
 
   responses:
+    BadRequest:
+      description: |
+        Missing or non-numeric `lat`, `lon` or `year`, missing
+        `provider`, or neither/both of `use_case` and `variables`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
-      description: Missing or invalid X-API-Key
+      description: Missing or invalid X-API-Key.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     RateLimited:
-      description: Per-key rate limit exceeded
+      description: Per-key rate limit exceeded.
       content:
         application/json:
           schema:
@@ -353,19 +345,18 @@ components:
       properties:
         error:
           type: string
+          example: "either use_case or variables is required"
 
     WeatherPointJSON:
       type: object
       description: |
-        `format=json` response shape. `index` is always present; one
-        additional array-valued key per resolved variable (see
-        `variables`/`use_case` on the parent operation), e.g. `T`/`GHI`/
-        `DHI`/`DNI` for `use_case=solar`, or `WS_10M`/`U_10M`/`V_10M`
-        for `use_case=wind`. `null` entries (rather than a bare
-        `NaN` token, which is invalid JSON and would break a strict
-        decoder like Go's `encoding/json`) mark hours where the source
-        archive has no value -- real, not hypothetical: e.g.
-        ERA5-Land's boundary-repaired archive-start hour.
+        `index` is always present. Each resolved variable appears as an
+        additional array-valued key of the same length.
+
+        Missing hours are `null` rather than a bare `NaN` token, which
+        is invalid JSON and would break a strict decoder such as Go's
+        encoding/json. These do occur, for example at the archive-start
+        hour of a boundary-repaired ERA5-Land file.
       required: [index]
       properties:
         index:
@@ -385,7 +376,7 @@ components:
       properties:
         variables:
           type: object
-          description: Canonical variable name -> its unit and description.
+          description: Variable name to its unit and description.
           additionalProperties:
             type: object
             required: [unit, description]
@@ -396,7 +387,7 @@ components:
                 type: string
         use_cases:
           type: object
-          description: use_case shortcut name -> its member variable names, in order.
+          description: Shortcut name to its member variables, in order.
           additionalProperties:
             type: array
             items:
