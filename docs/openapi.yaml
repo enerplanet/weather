@@ -31,12 +31,20 @@ info:
     `use_case=solar` when neither is given, matching every caller's
     behavior before these params existed.
 
+    ## Choosing a response format
+
+    `format=parquet` (default) or `format=json` -- independent of
+    `use_case`/`variables`, controls how the *same* resolved data is
+    encoded on the wire. See "Choosing what you need" above for which
+    columns you get; this only decides the byte format they arrive in.
+
     ## Typical workflow
 
     1. `GET /v1/weather/variables` -- see what's queryable.
-    2. `GET /v1/weather/point?provider=merra-2&lat=48.2&lon=16.4&year=2018&use_case=wind`
+    2. `GET /v1/weather/point?provider=merra-2&lat=48.2&lon=16.4&year=2018&use_case=wind&format=json`
        -- same `lat`/`lon`/`year` you're always querying for, plus
-       whatever `use_case` or `variables` step 1 told you to use.
+       whatever `use_case`/`variables` step 1 told you to use, plus
+       `format` for how you want it encoded.
 
     Runs under gunicorn in Docker (`infrastructure/container/
     docker-compose.serve.yml`, `PIPELINE_MODE=serve`), in its own
