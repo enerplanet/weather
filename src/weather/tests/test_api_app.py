@@ -149,3 +149,30 @@ def test_weather_variables_discovery_endpoint(client):
 def test_weather_variables_discovery_requires_api_key(client):
     resp = client.get("/v1/weather/variables")
     assert resp.status_code == 401
+
+
+def test_health_is_liveness_only(client):
+    resp = client.get("/v1/health", headers={"X-API-Key": API_KEY})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+
+def test_weather_providers_endpoint(client, monkeypatch):
+    import weather.api.app as app_module
+    import weather.registry
+
+    monkeypatch.setattr(weather.registry, "list_providers", lambda: ["merra-2", "cosmo-rea6"])
+    monkeypatch.setattr(
+        app_module, "_available_years",
+        lambda name: [2018] if name == "merra-2" else [],
+    )
+    resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["providers"]["merra-2"]["years"] == [2018]
+    assert body["providers"]["cosmo-rea6"]["years"] == []
+
+
+def test_weather_providers_requires_api_key(client):
+    resp = client.get("/v1/weather/providers")
+    assert resp.status_code == 401

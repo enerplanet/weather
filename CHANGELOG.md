@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking**: `GET /v1/health` no longer returns `providers` -- it's
+  liveness only now (`{"status": "ok"}`, no filesystem I/O). Moved to
+  new `GET /v1/weather/providers`. See #7.
+
 ### Added
 
 - `infrastructure/container/docker-compose.serve.yml` -- runs `weather

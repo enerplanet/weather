@@ -87,11 +87,8 @@ paths:
   /v1/health:
     get:
       tags: [Health]
-      summary: Per-provider archive availability
-      description: |
-        Years with a processed archive for each provider, inferred from
-        filenames already on disk. Deliberately does not expose a raw
-        directory listing.
+      summary: Liveness check
+      description: No filesystem I/O -- see /v1/weather/providers for archive availability.
       operationId: getHealth
       responses:
         "200":
@@ -102,6 +99,34 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
               example:
                 status: ok
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          description: Server misconfigured (no API keys set)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/weather/providers:
+    get:
+      tags: [Weather]
+      summary: Per-provider archive availability
+      description: |
+        Years with a processed archive for each provider, inferred from
+        filenames already on disk. Deliberately does not expose a raw
+        directory listing.
+      operationId: getWeatherProviders
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProvidersResponse"
+              example:
                 providers:
                   era5-land:
                     years: [2018, 2019]
@@ -113,12 +138,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
-        "503":
-          description: Server misconfigured (no API keys set)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/weather/point:
     get:
@@ -365,11 +384,16 @@ components:
 
     HealthResponse:
       type: object
-      required: [status, providers]
+      required: [status]
       properties:
         status:
           type: string
           enum: [ok]
+
+    ProvidersResponse:
+      type: object
+      required: [providers]
+      properties:
         providers:
           type: object
           additionalProperties:

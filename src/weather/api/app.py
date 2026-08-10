@@ -181,6 +181,12 @@ def create_app() -> Flask:
 
     @app.get("/v1/health")
     def health() -> Any:
+        # Liveness only -- no filesystem I/O. Archive availability is a
+        # discovery concern, not a health signal; see /v1/weather/providers.
+        return jsonify(status="ok")
+
+    @app.get("/v1/weather/providers")
+    def weather_providers() -> Any:
         from weather.registry import list_providers
 
         providers: dict[str, dict[str, Any]] = {}
@@ -189,7 +195,7 @@ def create_app() -> Flask:
                 providers[name] = {"years": _available_years(name)}
             except OSError as exc:
                 providers[name] = {"error": str(exc)}
-        return jsonify(status="ok", providers=providers)
+        return jsonify(providers=providers)
 
     @app.get("/v1/weather/variables")
     def weather_variables() -> Any:

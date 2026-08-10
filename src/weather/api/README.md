@@ -35,9 +35,11 @@ lists every variable's name/unit/description and every `use_case`'s
 members, so a caller doesn't need to already know the meteorological
 variable names.
 
-`GET /v1/health` → per-provider list of years with a processed archive,
-derived from filenames already on disk. Deliberately does not expose a raw
-directory listing.
+`GET /v1/health` → liveness only, `{"status": "ok"}`, no filesystem I/O.
+
+`GET /v1/weather/providers` → per-provider list of years with a processed
+archive, derived from filenames already on disk. Deliberately does not
+expose a raw directory listing.
 
 Deliberately **not** exposed: file listing, bulk/archive download, anything
 beyond this single point query already at the heart of `weather`'s own
