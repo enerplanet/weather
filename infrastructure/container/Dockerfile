@@ -73,6 +73,12 @@ RUN apt-get update \
 # Copy the pre-built conda environment from builder
 COPY --from=builder /opt/conda/envs/weather_env /opt/conda/envs/weather_env
 
+# gunicorn (WSGI server for PIPELINE_MODE=serve) is deliberately not in
+# weather_env.yml itself -- it's Unix-only (fork()-based), same reasoning
+# as buem's own api Dockerfile. Everything else `weather serve` needs
+# (flask, pvlib, pyarrow, xarray) is already in weather_env.yml.
+RUN /opt/conda/envs/weather_env/bin/pip install gunicorn
+
 # Copy entrypoint into the image (not bind-mounted — it is container infrastructure)
 COPY infrastructure/container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
@@ -95,6 +101,9 @@ ENV COSMO_WORK_DIR=/data
 
 # Prevent HDF5 file-locking deadlocks on GPFS / NFS file systems (HPC)
 ENV HDF5_USE_FILE_LOCKING=FALSE
+
+# weather serve (PIPELINE_MODE=serve) listens here; see entrypoint.sh
+EXPOSE 8080
 
 WORKDIR /app
 

@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `infrastructure/container/docker-compose.serve.yml` -- runs `weather
+  serve` under gunicorn in Docker (`PIPELINE_MODE=serve`, new
+  `entrypoint.sh` case, reuses the existing COSMO-pipeline image). Its
+  own `weather` Compose namespace, deliberately not joined to any one
+  consumer's namespace (e.g. `building-simulation`), since this service
+  has more than one downstream consumer in mind. See #6.
 - `weather.variables` -- canonical registry of every variable
   `get_point_weather()`/`weather serve` can return (name, unit,
   description) and the named `use_case` shortcuts that group them

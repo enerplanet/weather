@@ -1,0 +1,85 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# weather serve — Docker Compose (standalone service, own namespace)
+# ──────────────────────────────────────────────────────────────────────────────
+# Runs weather serve's point-query HTTP API as a long-running service, in its
+# own `weather` project namespace -- deliberately NOT joined to the
+# `building-simulation` namespace (buem-gateway's own compose stack,
+# ../../buem-gateway/environment/docker-compose.yml). weather is a generic
+# service with more than one downstream consumer in mind (BuEM today, PV/wind
+# simulation named explicitly as future ones -- see decisions/2026-08-07-
+# buem-weather-access-architecture.md), so it shouldn't be scoped to one
+# tech's namespace the way ignis/buem legitimately share `building-simulation`
+# (both are building-simulation concerns specifically).
+#
+# A consumer in a different Compose project reaches this service via its
+# published host port (below), the same way buem's own standalone
+# infrastructure/container/docker-compose.yml documents reaching services
+# across project boundaries: from inside another container, that means
+# `host.docker.internal:${WEATHER_API_PORT:-8090}` with
+# `extra_hosts: ["host.docker.internal:host-gateway"]` set on that
+# consumer's own service (not needed here -- this service doesn't call out
+# to anything). From the host itself, `localhost:${WEATHER_API_PORT:-8090}`.
+#
+# Reuses the same image as the data-pipeline compose file
+# (docker-compose.yml, weather-cosmo-rea6) -- the only difference is
+# PIPELINE_MODE=serve, routed by entrypoint.sh. No separate Dockerfile.
+#
+# ── Build & run ────────────────────────────────────────────────────────────
+#   docker compose -f infrastructure/container/docker-compose.serve.yml \
+#       up -d --build
+#
+# ── Logs / status ───────────────────────────────────────────────────────────
+#   docker compose -f infrastructure/container/docker-compose.serve.yml logs -f
+#
+# Environment variables (set in .env at repo root, or shell export):
+#   WEATHER_API_KEYS       Comma-separated API keys (required, no default --
+#                          see src/weather/api/README.md)
+#   WEATHER_API_RATE_LIMIT Requests/min per key       (default: 60)
+#   WEATHER_API_CACHE_SIZE Cached (provider,lat,lon,year) entries (default: 256)
+#   WEATHER_DATA_DIR_HOST  Host path for the data root (default: ../../data --
+#                          the parent of merra2/era5_land/cosmo_rea6, NOT
+#                          the pipeline compose file's own COSMO-specific
+#                          default of ../../data/cosmo_rea6). Deliberately
+#                          not named WEATHER_DATA_DIR -- .env already sets
+#                          that for direct (non-Docker) CLI use, resolved
+#                          relative to the repo root, not this file.
+#   WEATHER_API_PORT       Host port to expose          (default: 8090)
+# ──────────────────────────────────────────────────────────────────────────────
+name: weather
+
+services:
+  weather-serve:
+    container_name: weather-serve
+    build:
+      context: ../..
+      dockerfile: infrastructure/container/Dockerfile
+    image: weather-cosmo-rea6:${WEATHER_VERSION:-latest}
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      PIPELINE_MODE: serve
+      WEATHER_DATA_DIR: /data
+      WEATHER_API_WORKERS: ${WEATHER_API_WORKERS:-2}
+      WEATHER_API_KEYS: ${WEATHER_API_KEYS:?set WEATHER_API_KEYS in .env}
+      WEATHER_API_RATE_LIMIT: ${WEATHER_API_RATE_LIMIT:-60}
+      WEATHER_API_CACHE_SIZE: ${WEATHER_API_CACHE_SIZE:-256}
+    env_file:
+      - path: ../../.env
+        required: false
+    volumes:
+      - ../../src:/app/src:ro
+      - ${WEATHER_DATA_DIR_HOST:-../../data}:/data:ro
+    ports:
+      - "${WEATHER_API_PORT:-8090}:8080"
+    healthcheck:
+      # Assumes a single key in WEATHER_API_KEYS for local/dev use -- a
+      # genuinely multi-key value won't match here, since this doesn't
+      # split on commas. Fine for the healthcheck's purpose (is the
+      # process up and authenticating requests at all), not a general
+      # multi-key test.
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header=\"X-API-Key: $$WEATHER_API_KEYS\" http://localhost:8080/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped

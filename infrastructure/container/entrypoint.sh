@@ -13,6 +13,8 @@
 #   merge         Merge monthly NCs → annual NC for COSMO_YEAR (post-processing)
 #   percentile    Run test_percentile.py (needs annual NCs from multi-year)
 #   check         Validate imports + run unit tests — no data required
+#   serve         Run weather serve's point-query HTTP API under gunicorn,
+#                 listening on :8080 -- see src/weather/api/README.md
 #   (unset)       Forward raw command args to `python -m weather`
 #
 # Environment variables
@@ -36,6 +38,12 @@
 #                           other COSMO_* vars above), so there is exactly one
 #                           place this behaves differently than a plain
 #                           passed-through env var: nowhere. Just set it.
+#   WEATHER_API_WORKERS     serve mode: gunicorn worker count    (default: 2)
+#   WEATHER_DATA_DIR        serve mode: data root inside the container
+#                           (unset here -- weather.settings' own default;
+#                           the compose file sets this to /data)
+#   WEATHER_API_KEYS        serve mode: required, no default -- see
+#                           src/weather/api/README.md
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -91,6 +99,12 @@ case "${PIPELINE_MODE:-}" in
     [[ "${COSMO_WORK_DIR:-}"      ]] && args+=(--work-dir   "${COSMO_WORK_DIR}")
     [[ "${COSMO_PERCENTILES:-}"   ]] && args+=(--percentiles "${COSMO_PERCENTILES}")
     exec "${args[@]}"
+    ;;
+
+  # ── weather serve: point-query HTTP API ────────────────────────────────
+  serve)
+    exec gunicorn --bind 0.0.0.0:8080 --workers "${WEATHER_API_WORKERS:-2}" \
+        "weather.api.app:create_app()"
     ;;
 
   # ── Image smoke test — no data required ────────────────────────────────
