@@ -35,9 +35,6 @@
 #   WEATHER_API_KEYS       Comma-separated API keys (required, no default --
 #                          see src/weather/api/README.md)
 #   WEATHER_API_RATE_LIMIT Requests/min per key       (default: 60)
-#   WEATHER_API_ALLOWED_ORIGINS  Comma-separated CORS allowlist (default:
-#                          none -- e.g. https://enerplanet.github.io, for
-#                          the OpenAPI docs page's "Try it out")
 #   WEATHER_API_CACHE_SIZE Cached (provider,lat,lon,year) entries (default: 256)
 #   WEATHER_DATA_DIR_HOST  Host path for the data root (default: ../../data --
 #                          the parent of merra2/era5_land/cosmo_rea6, NOT
@@ -65,7 +62,6 @@ services:
       WEATHER_API_WORKERS: ${WEATHER_API_WORKERS:-2}
       WEATHER_API_KEYS: ${WEATHER_API_KEYS:?set WEATHER_API_KEYS in .env}
       WEATHER_API_RATE_LIMIT: ${WEATHER_API_RATE_LIMIT:-60}
-      WEATHER_API_ALLOWED_ORIGINS: ${WEATHER_API_ALLOWED_ORIGINS:-}
       WEATHER_API_CACHE_SIZE: ${WEATHER_API_CACHE_SIZE:-256}
     env_file:
       - path: ../../.env

@@ -87,16 +87,6 @@ def _valid_api_keys() -> set[str]:
     return {k.strip() for k in raw.split(",") if k.strip()}
 
 
-def _allowed_origins() -> set[str]:
-    """CORS allowlist from WEATHER_API_ALLOWED_ORIGINS (comma-separated).
-
-    Empty by default -- CORS is opt-in, not needed for server-to-server
-    callers, only for a browser (e.g. the Swagger UI docs page).
-    """
-    raw = os.environ.get("WEATHER_API_ALLOWED_ORIGINS", "")
-    return {o.strip() for o in raw.split(",") if o.strip()}
-
-
 class _RateLimiter:
     """Minimal fixed-window limiter, per API key.
 
@@ -157,10 +147,6 @@ def create_app() -> Flask:
 
     @app.before_request
     def _authenticate() -> Any:
-        # Preflight never carries X-API-Key -- answer it here, before auth.
-        if request.method == "OPTIONS":
-            return Response(status=204)
-
         valid_keys = _valid_api_keys()
         if not valid_keys:
             logger.error(
@@ -180,15 +166,6 @@ def create_app() -> Flask:
             return jsonify(error="rate limit exceeded"), 429
 
         return None
-
-    @app.after_request
-    def _cors(response: Response) -> Response:
-        origin = request.headers.get("Origin", "")
-        if origin in _allowed_origins():
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "X-API-Key"
-        return response
 
     @app.after_request
     def _audit_log(response: Response) -> Response:

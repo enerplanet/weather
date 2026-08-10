@@ -51,12 +51,6 @@ info:
     for network-level restriction — pair with a firewall/IP allowlist
     scoped to known caller egress.
 
-    ## CORS
-
-    Off by default. `WEATHER_API_ALLOWED_ORIGINS` (comma-separated)
-    opts specific browser origins in — e.g. this docs page's own
-    origin, so "Try it out" works against a local/Docker instance.
-
     ## Rate limiting
 
     Per-key fixed-window limit (`WEATHER_API_RATE_LIMIT`, default 60

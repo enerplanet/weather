@@ -149,38 +149,3 @@ def test_weather_variables_discovery_endpoint(client):
 def test_weather_variables_discovery_requires_api_key(client):
     resp = client.get("/v1/weather/variables")
     assert resp.status_code == 401
-
-
-@pytest.fixture
-def cors_client(monkeypatch):
-    monkeypatch.setenv("WEATHER_API_KEYS", API_KEY)
-    monkeypatch.setenv("WEATHER_API_ALLOWED_ORIGINS", "https://example.com")
-    app = create_app()
-    app.config["TESTING"] = True
-    with app.test_client() as c:
-        yield c
-
-
-def test_cors_preflight_allowed_origin(cors_client):
-    resp = cors_client.options(
-        "/v1/health",
-        headers={"Origin": "https://example.com", "Access-Control-Request-Method": "GET"},
-    )
-    assert resp.status_code == 204
-    assert resp.headers["Access-Control-Allow-Origin"] == "https://example.com"
-
-
-def test_cors_preflight_skips_auth(cors_client):
-    # No X-API-Key -- would 401 on any other method, but preflight must
-    # succeed regardless (browsers never send custom headers on OPTIONS).
-    resp = cors_client.options("/v1/health", headers={"Origin": "https://example.com"})
-    assert resp.status_code == 204
-
-
-def test_cors_header_absent_for_unlisted_origin(client, monkeypatch):
-    _patch_get_point_weather(monkeypatch)
-    resp = client.get(
-        "/v1/health",
-        headers={"X-API-Key": API_KEY, "Origin": "https://evil.example"},
-    )
-    assert "Access-Control-Allow-Origin" not in resp.headers

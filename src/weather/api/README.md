@@ -51,9 +51,7 @@ Static API keys via `WEATHER_API_KEYS` (comma-separated), checked against
 the `X-API-Key` header. A per-key in-memory rate limiter
 (`WEATHER_API_RATE_LIMIT`, default 60 req/min) guards against the "many
 small point queries reconstruct the bulk archive" risk. Every request is
-audit-logged (key prefix, path, status, remote address). CORS is off
-by default; `WEATHER_API_ALLOWED_ORIGINS` opts specific origins in
-(e.g. the docs page, for "Try it out").
+audit-logged (key prefix, path, status, remote address).
 
 This is not a substitute for network-level restrictions — real deployment
 should still pair this with a firewall/IP allowlist scoped to buem's known
