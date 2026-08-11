@@ -34,3 +34,12 @@ def test_use_case_enum_matches_registry():
 def test_variables_enum_matches_registry():
     enum = _point_query_param("variables")["schema"]["items"]["enum"]
     assert set(enum) == set(VARIABLES)
+
+
+def test_openapi_spec_is_valid():
+    """The spec itself is well-formed OpenAPI 3.0.3, not just internally
+    consistent with weather.variables (the two checks above)."""
+    openapi_spec_validator = pytest.importorskip("openapi_spec_validator")
+
+    spec = yaml.safe_load(OPENAPI_PATH.read_text())
+    openapi_spec_validator.validate(spec)

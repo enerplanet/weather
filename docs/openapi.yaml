@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: weather point-query API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Hourly weather for a single location and year, read from
     already-processed archives. Given a provider, latitude, longitude
@@ -67,7 +67,20 @@ info:
       same request will not help.
 
     All error responses share the same shape: a JSON object with a
-    single `error` string.
+    single `error` field, itself an object with `code` (a stable,
+    machine-readable snake_case identifier -- branch on this, not on
+    `message`), `message` (human-readable), and an optional free-form
+    `details` object with per-error context (e.g. which parameter was
+    the problem):
+
+    ```json
+    {"error": {"code": "unknown_use_case", "message": "Unknown use_case: 'hydro'. Available: solar, wind", "details": {"use_case": "hydro"}}}
+    ```
+
+    The same object shape appears wherever an error can occur, including
+    a per-provider failure inside `GET /v1/weather/providers`' 200 body
+    (see that endpoint below) -- one shape to detect a failure with,
+    regardless of where in a response it appears.
 
     ## Rate limiting
 
@@ -187,11 +200,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/WeatherPointJSON"
               example:
-                index: ["2018-01-01T00:30:00", "2018-01-01T01:30:00"]
-                T: [0.89, 0.72]
-                GHI: [0.0, 0.0]
-                DNI: [0.0, 0.0]
-                DHI: [0.0, 0.0]
+                index: ["2018-01-01T00:30:00Z", "2018-01-01T01:30:00Z"]
+                variables:
+                  T: [0.89, 0.72]
+                  GHI: [0.0, 0.0]
+                  DNI: [0.0, 0.0]
+                  DHI: [0.0, 0.0]
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -258,8 +272,8 @@ paths:
         Years with a processed archive per provider, inferred from
         filenames on disk. Not a directory listing.
 
-        A provider may report an `error` string instead of `years` if
-        its archive location cannot be read.
+        A provider may report the same `error` object described above
+        instead of `years` if its archive location cannot be read.
       operationId: getWeatherProviders
       responses:
         "200":
@@ -344,31 +358,52 @@ components:
       required: [error]
       properties:
         error:
-          type: string
-          example: "either use_case or variables is required"
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: |
+                Stable, machine-readable snake_case identifier -- branch
+                on this, not on `message`. Not enumerated here; see
+                weather.errors in the source for the authoritative list.
+              example: variables_use_case_required
+            message:
+              type: string
+              example: "Specify one of variables/use_case -- e.g. use_case=solar or variables=T,GHI,DHI,DNI. Available use_case names: solar, wind"
+            details:
+              type: object
+              description: Optional, free-form, no fixed schema.
+              additionalProperties: true
 
     WeatherPointJSON:
       type: object
       description: |
-        `index` is always present. Each resolved variable appears as an
-        additional array-valued key of the same length.
+        `variables` is keyed by resolved variable name; each value is an
+        array the same length as `index`, in the order requested.
 
         Missing hours are `null` rather than a bare `NaN` token, which
         is invalid JSON and would break a strict decoder such as Go's
         encoding/json. These do occur, for example at the archive-start
         hour of a boundary-repaired ERA5-Land file.
-      required: [index]
+      required: [index, variables]
       properties:
         index:
           type: array
+          description: |
+            RFC3339 timestamps with an explicit `Z` (UTC) suffix, e.g.
+            `2018-01-01T00:30:00Z` -- parses directly with Go's
+            `time.Parse(time.RFC3339, ...)`, no custom layout needed.
           items:
             type: string
             format: date-time
-      additionalProperties:
-        type: array
-        items:
-          type: number
-          nullable: true
+        variables:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: number
+              nullable: true
 
     VariablesResponse:
       type: object
@@ -416,8 +451,4 @@ components:
                     type: array
                     items:
                       type: integer
-              - type: object
-                required: [error]
-                properties:
-                  error:
-                    type: string
+              - $ref: "#/components/schemas/ErrorResponse"

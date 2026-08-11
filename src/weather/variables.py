@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import errors
+from .errors import WeatherAPIError
+
 
 @dataclass(frozen=True)
 class VariableSpec:
@@ -66,21 +69,28 @@ def resolve_variables(
 
     Raises
     ------
-    ValueError
-        If neither or both are given, or either names something not in
-        ``VARIABLES``/``USE_CASES`` -- the bad value(s) are named in the
-        message, not just "invalid request".
+    WeatherAPIError
+        A ``ValueError`` subclass carrying a stable ``.code`` (see
+        ``weather.errors``). Raised if neither or both are given, or
+        either names something not in ``VARIABLES``/``USE_CASES`` -- the
+        bad value(s) are named in the message, not just "invalid
+        request".
     """
     if variables is not None and use_case is not None:
-        raise ValueError(
+        raise WeatherAPIError(
+            errors.VARIABLES_USE_CASE_CONFLICT,
             "Provide at most one of variables/use_case, not both "
-            f"(got variables={variables!r}, use_case={use_case!r})"
+            f"(got variables={variables!r}, use_case={use_case!r})",
         )
 
     if use_case is not None:
         if use_case not in USE_CASES:
             available = ", ".join(sorted(USE_CASES))
-            raise ValueError(f"Unknown use_case: {use_case!r}. Available: {available}")
+            raise WeatherAPIError(
+                errors.UNKNOWN_USE_CASE,
+                f"Unknown use_case: {use_case!r}. Available: {available}",
+                details={"use_case": use_case},
+            )
         return USE_CASES[use_case]
 
     if variables is not None:
@@ -89,15 +99,20 @@ def resolve_variables(
         unknown = [n for n in names if n not in VARIABLES]
         if unknown:
             available = ", ".join(sorted(VARIABLES))
-            raise ValueError(
-                f"Unknown variable(s): {unknown!r}. Available: {available}"
+            raise WeatherAPIError(
+                errors.UNKNOWN_VARIABLE,
+                f"Unknown variable(s): {unknown!r}. Available: {available}",
+                details={"variables": unknown},
             )
         if not names:
-            raise ValueError("variables was given but empty")
+            raise WeatherAPIError(
+                errors.VARIABLES_USE_CASE_REQUIRED, "variables was given but empty"
+            )
         return tuple(names)
 
     available = ", ".join(sorted(USE_CASES))
-    raise ValueError(
+    raise WeatherAPIError(
+        errors.VARIABLES_USE_CASE_REQUIRED,
         "Specify one of variables/use_case -- e.g. use_case=solar or "
-        f"variables=T,GHI,DHI,DNI. Available use_case names: {available}"
+        f"variables=T,GHI,DHI,DNI. Available use_case names: {available}",
     )

@@ -32,9 +32,11 @@ from typing import Any
 
 import pandas as pd
 
+from . import errors
 from .common.dni_reconstruction import reconstruct_dni_dhi
 from .common.env import data_root
 from .common.geo_lookup import find_nearest_cell
+from .errors import WeatherAPIError
 from .variables import resolve_variables
 
 logger = logging.getLogger(__name__)
@@ -512,9 +514,11 @@ def get_point_weather(
 
     Raises
     ------
-    ValueError
-        If *provider* is not recognized, both *variables* and *use_case*
-        are given, or either names something unknown.
+    WeatherAPIError
+        A ``ValueError`` subclass carrying a stable ``.code`` (see
+        ``weather.errors``). Raised if *provider* is not recognized,
+        both *variables* and *use_case* are given, or either names
+        something unknown.
     FileNotFoundError
         If no processed archive exists for *(provider, year)* under
         *data_dir*.
@@ -529,7 +533,11 @@ def get_point_weather(
     canonical = _ALIASES.get(normalized)
     if canonical is None:
         available = ", ".join(sorted(set(_ALIASES.values())))
-        raise ValueError(f"Unknown provider: {provider!r}. Available: {available}")
+        raise WeatherAPIError(
+            errors.UNKNOWN_PROVIDER,
+            f"Unknown provider: {provider!r}. Available: {available}",
+            details={"provider": provider},
+        )
 
     resolved_variables = resolve_variables(variables=variables, use_case=use_case)
 

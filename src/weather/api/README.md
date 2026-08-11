@@ -20,10 +20,11 @@ returned as a parquet-encoded body (`application/octet-stream`; the reset
 index column is first, then one column per resolved variable, in order).
 
 Add `&format=json` to get the same data as a JSON body instead
-(`{"index": [...], "T": [...], ...}`, one key per resolved variable,
-shaped to match buem's `WeatherConfig` dict directly for the `solar`
-use_case) — for a caller that doesn't want a parquet-parsing dependency
-just to consume this endpoint. `NaN` values serialize as JSON `null`.
+(`{"index": [...], "variables": {"T": [...], ...}}`, `index` an array of
+`Z`-suffixed RFC3339 UTC timestamps, `variables` keyed by resolved
+variable name) — for a caller that doesn't want a parquet-parsing
+dependency just to consume this endpoint. `NaN` values serialize as
+JSON `null`.
 
 Exactly one of `&use_case=` / `&variables=` is required -- no default,
 so a caller that forgets to say what it needs gets a 400, not a silent

@@ -11,6 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: `GET /v1/weather/point`'s `format=json` response nests
+  variables under a `variables` object instead of placing them as
+  top-level keys alongside `index`
+  (`{"index": [...], "variables": {"T": [...]}}`). The flat shape
+  couldn't decode into a typed struct (e.g. Go) and let a variable
+  literally named `index` collide with the timestamps. See #13.
+- **Breaking**: every error response's `error` field is now an object
+  (`{"code": "...", "message": "...", "details": {}}`) instead of a
+  bare string. `code` is a stable, machine-readable identifier -- see
+  `weather.errors` for the full list -- callers should branch on it,
+  not on `message` text. The per-provider failure inside
+  `GET /v1/weather/providers`' 200 body uses the same object, replacing
+  its own separate `{"error": "string"}` shape. See #13.
+- **Breaking**: `GET /v1/weather/point`'s `format=json` timestamps now
+  carry an explicit `Z` (UTC) suffix (RFC3339, e.g.
+  `2018-01-01T00:30:00Z`) instead of no offset marker at all --
+  parses directly with Go's `time.Parse(time.RFC3339, ...)`. The
+  underlying data was always UTC; only the serialized string changes.
+  See #13.
+- `GET /v1/weather/point` now validates `lat`/`lon` are within
+  `[-90, 90]`/`[-180, 180]` and rejects missing/non-numeric parameters
+  with distinct error codes -- previously undocumented-but-enforced
+  bounds were declared in the OpenAPI spec only, not checked in code.
+  See #13.
 - **Breaking**: `variables`/`use_case` no longer default to `solar` --
   one of them is now required on `get_point_weather()` and
   `GET /v1/weather/point`. A caller that forgets to say what it needs
@@ -21,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
+- `docs/openapi.yaml`: version bumped `0.1.0` -> `0.2.0` for the
+  breaking response/error shape changes above. New
+  `openapi-spec-validator`-backed test keeps the spec itself validating
+  as OpenAPI 3.0.3, not just internally consistent with
+  `weather.variables`. See #13.
 - `docs/openapi.yaml`: `use_case`/`variables` now render as selectable
   options (enum), same as `provider` already did, instead of free-text
   fields. Added a concrete "discover, then query" workflow example.

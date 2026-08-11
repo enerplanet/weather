@@ -40,6 +40,9 @@ from typing import Any
 import pandas as pd
 from flask import Flask, Response, jsonify, request
 
+from .. import errors
+from ..errors import WeatherAPIError, error_body
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,7 +155,11 @@ def create_app() -> Flask:
             logger.error(
                 "WEATHER_API_KEYS is unset/empty -- refusing all requests."
             )
-            return jsonify(error="server misconfigured: no API keys set"), 503
+            return jsonify(
+                error=error_body(
+                    errors.SERVICE_UNAVAILABLE, "server misconfigured: no API keys set"
+                )
+            ), 503
 
         key = request.headers.get("X-API-Key", "")
         if key not in valid_keys:
@@ -160,10 +167,14 @@ def create_app() -> Flask:
                 "Rejected request from %s: bad/missing API key.",
                 request.remote_addr,
             )
-            return jsonify(error="invalid or missing X-API-Key"), 401
+            return jsonify(
+                error=error_body(errors.INVALID_API_KEY, "invalid or missing X-API-Key")
+            ), 401
 
         if not limiter.allow(key):
-            return jsonify(error="rate limit exceeded"), 429
+            return jsonify(
+                error=error_body(errors.RATE_LIMIT_EXCEEDED, "rate limit exceeded")
+            ), 429
 
         return None
 
@@ -194,7 +205,9 @@ def create_app() -> Flask:
             try:
                 providers[name] = {"years": _available_years(name)}
             except OSError as exc:
-                providers[name] = {"error": str(exc)}
+                providers[name] = {
+                    "error": error_body(errors.PROVIDER_LISTING_FAILED, str(exc))
+                }
         return jsonify(providers=providers)
 
     @app.get("/v1/weather/variables")
@@ -218,27 +231,61 @@ def create_app() -> Flask:
             latitude = float(request.args["lat"])
             longitude = float(request.args["lon"])
             year = int(request.args["year"])
-        except (KeyError, ValueError):
+        except KeyError as exc:
             return jsonify(
-                error="lat, lon, year are required and must be numeric"
+                error=error_body(
+                    errors.MISSING_PARAMETER,
+                    f"Missing required parameter: {exc.args[0]}",
+                    {"parameter": exc.args[0]},
+                )
             ), 400
+        except ValueError:
+            return jsonify(
+                error=error_body(
+                    errors.NON_NUMERIC_PARAMETER, "lat, lon, year must be numeric"
+                )
+            ), 400
+
+        if not (-90.0 <= latitude <= 90.0):
+            return jsonify(
+                error=error_body(
+                    errors.COORDINATE_OUT_OF_RANGE,
+                    f"lat must be between -90 and 90, got {latitude}",
+                    {"parameter": "lat", "value": latitude},
+                )
+            ), 400
+        if not (-180.0 <= longitude <= 180.0):
+            return jsonify(
+                error=error_body(
+                    errors.COORDINATE_OUT_OF_RANGE,
+                    f"lon must be between -180 and 180, got {longitude}",
+                    {"parameter": "lon", "value": longitude},
+                )
+            ), 400
+
         if not provider:
-            return jsonify(error="provider is required"), 400
+            return jsonify(
+                error=error_body(
+                    errors.MISSING_PARAMETER,
+                    "provider is required",
+                    {"parameter": "provider"},
+                )
+            ), 400
 
         try:
             variables = resolve_variables(
                 variables=request.args.get("variables"),
                 use_case=request.args.get("use_case"),
             )
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+        except WeatherAPIError as exc:
+            return jsonify(error=error_body(exc.code, str(exc), exc.details)), 400
 
         try:
             df = _cached_point_weather(provider, latitude, longitude, year, variables)
+        except WeatherAPIError as exc:
+            return jsonify(error=error_body(exc.code, str(exc), exc.details)), 400
         except FileNotFoundError as exc:
-            return jsonify(error=str(exc)), 404
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+            return jsonify(error=error_body(errors.ARCHIVE_NOT_FOUND, str(exc))), 404
         except (RuntimeError, KeyError) as exc:
             # point_query.py raises these when the archive itself isn't
             # in a servable state for this query -- an unrepaired
@@ -248,16 +295,16 @@ def create_app() -> Flask:
             # All are real, actionable server-side data problems, not
             # a bad request or a crash -- surface them as such instead
             # of falling through to Flask's generic unhelpful 500.
-            return jsonify(error=str(exc)), 503
+            return jsonify(
+                error=error_body(errors.SERVICE_UNAVAILABLE, str(exc))
+            ), 503
 
         if request.args.get("format", "parquet").lower() == "json":
-            # JSON mode: same cached DataFrame, shaped to match buem's own
-            # WeatherConfig dict format directly (index plus one key per
-            # requested variable) -- see
-            # buem/src/buem/config/cfg_building.py::WeatherConfig -- so a
-            # Go (or any) caller can decode straight into the request
-            # payload it already builds, no parquet-parsing dependency
-            # needed just to consume this one endpoint.
+            # JSON mode: same cached DataFrame, nested as
+            # {"index": [...], "variables": {name: [...]}} rather than
+            # flat top-level keys -- a flat shape can't decode into a
+            # typed struct (e.g. Go) and lets a variable literally named
+            # "index" collide with the timestamps. See #13.
             # NaN -> None so this serializes as JSON `null`, not the bare
             # `NaN` token Python's json module emits by default -- that
             # token is invalid JSON and a strict decoder (e.g. Go's
@@ -268,8 +315,15 @@ def create_app() -> Flask:
                 return [None if pd.isna(v) else float(v) for v in out[name]]
 
             out = df.reset_index()
-            payload = {"index": [ts.isoformat() for ts in out["time"]]}
-            payload.update({name: _col(name) for name in variables})
+            # Data is UTC by construction throughout the pipeline (see
+            # providers/*/transform.py, common/dni_reconstruction.py), but
+            # get_point_weather()'s return contract is deliberately
+            # tz-naive (point_query.py's _finalize/_strip_tz) -- format
+            # explicitly as UTC rather than relying on any tz on ts itself.
+            payload = {
+                "index": [ts.strftime("%Y-%m-%dT%H:%M:%SZ") for ts in out["time"]],
+                "variables": {name: _col(name) for name in variables},
+            }
             return jsonify(**payload)
 
         buf = io.BytesIO()
