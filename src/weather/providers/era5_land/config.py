@@ -20,17 +20,22 @@ from ...settings import EnvSettings
 from .downloaded_attributes import ATTRIBUTES
 
 
-def _area_from_env() -> list[float] | None:
-    """Parse ``ERA5_AREA`` = "N,W,S,E" into a list, or None (= global).
+def _area_from_env() -> list[float]:
+    """Parse required ``ERA5_AREA`` = "N,W,S,E" into a list.
 
     CDS expects ``area = [North, West, South, East]`` in degrees.
-    Europe (matching the MERRA-2 footprint) is ``72,-11,34,32``.
-    Cropping shrinks each GRIB message ~24x versus global, which cuts
-    storage AND avoids eccodes memory-allocation failures.
+    Required -- unset or blank raises, rather than silently defaulting
+    to a global download (which is both far larger and hits eccodes
+    memory-allocation failures on large global fields). See
+    docs/COUNTRY_SCOPED_ARCHIVES.md for computing the box for a country
+    set.
     """
     raw = os.getenv("ERA5_AREA", "").strip()
     if not raw:
-        return None
+        raise ValueError(
+            "ERA5_AREA is required (format 'N,W,S,E') -- refusing to "
+            "default to a global download."
+        )
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     if len(parts) != 4:
         raise ValueError(
@@ -70,7 +75,7 @@ def get_config() -> dict[str, Any]:
         "cds_url": EnvSettings.era5_cds_url(),
         "cds_key": EnvSettings.era5_cds_key(),
 
-        # Geographic crop [N, W, S, E]; None = global.
+        # Geographic crop [N, W, S, E]; required, see _area_from_env.
         "area": _area_from_env(),
 
         # CDS runs ~ONE job per account at a time; more just queues.

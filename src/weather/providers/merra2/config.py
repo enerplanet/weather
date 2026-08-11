@@ -40,8 +40,8 @@ def get_config() -> dict[str, Any]:
         "threads_per_job": EnvSettings.merra2_threads_per_job(),
         "conda_env": EnvSettings.merra2_conda_env(),
         "cleanup": EnvSettings.merra2_cleanup(),
-        # Geographic crop [N, W, S, E]; Europe by default (see
-        # EnvSettings.merra2_area).
+        # Geographic crop [N, W, S, E]; required, see
+        # EnvSettings.merra2_area.
         "area": EnvSettings.merra2_area(),
         # GES DISC OPeNDAP has no CDS-style per-account job queue, so
         # this can be higher than ERA5's cds_max_concurrent=1.
