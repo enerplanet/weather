@@ -14,12 +14,7 @@ Two things were deliberately dropped from the upstream source:
   kept. ``uk``/``united_kingdom`` and ``czech_republic``/``czechia``
   remain because upstream defines them as two independent canonical
   entries (not aliases), and this module keeps the same distinction.
-
-The pan-European bounding box is also dropped: it's already the implicit
-default domain for every provider in this repo (see ``ERA5_AREA`` /
-``MERRA2_AREA`` defaults), so a country lookup does not need to duplicate
-it.
-"""
+  """
 
 from __future__ import annotations
 
