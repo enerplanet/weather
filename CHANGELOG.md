@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Every `weather serve` response now carries `RateLimit-Limit`,
+  `RateLimit-Remaining` and `RateLimit-Reset` headers; a `429` also
+  carries `Retry-After`. Documented in `docs/openapi.yaml` on every
+  response across all four endpoints. See #13.
 - `infrastructure/container/docker-compose.serve.yml` -- runs `weather
   serve` under gunicorn in Docker (`PIPELINE_MODE=serve`, new
   `entrypoint.sh` case, reuses the existing COSMO-pipeline image). Its

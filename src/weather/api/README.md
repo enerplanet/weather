@@ -55,6 +55,9 @@ the `X-API-Key` header. A per-key in-memory rate limiter
 small point queries reconstruct the bulk archive" risk. Every request is
 audit-logged (key prefix, path, status, remote address).
 
+Every response carries `RateLimit-Limit`/`RateLimit-Remaining`/
+`RateLimit-Reset`; a `429` also carries `Retry-After`.
+
 This is not a substitute for network-level restrictions — real deployment
 should still pair this with a firewall/IP allowlist scoped to buem's known
 egress, per the production-access design discussion (see buem's CLAUDE.md,

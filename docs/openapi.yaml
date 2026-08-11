@@ -88,6 +88,10 @@ info:
     guards against many small point queries being used to reconstruct a
     bulk archive. Batch your locations rather than fanning out.
 
+    Every response carries `RateLimit-Limit`, `RateLimit-Remaining` and
+    `RateLimit-Reset` (seconds until the window resets). A `429` also
+    carries `Retry-After` (seconds to wait before retrying).
+
   license:
     name: MIT
     url: https://github.com/UU-BUEM/weather/blob/main/LICENSE
@@ -187,6 +191,13 @@ paths:
           description: |
             8760 rows, or 8784 in a leap year. One column per resolved
             variable, in the order requested.
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/octet-stream:
               schema:
@@ -212,6 +223,13 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           description: No processed archive for this provider and year.
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
@@ -224,6 +242,13 @@ paths:
             boundary month, a file predating the lat/lon retention
             convention, or a requested variable this archive predates.
             Server-side data problem, not a bad request.
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
@@ -241,6 +266,13 @@ paths:
       responses:
         "200":
           description: OK
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
@@ -278,6 +310,13 @@ paths:
       responses:
         "200":
           description: OK
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
@@ -306,6 +345,13 @@ paths:
       responses:
         "200":
           description: OK
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
@@ -318,6 +364,13 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "503":
           description: Server misconfigured, no API keys set.
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
@@ -335,22 +388,63 @@ components:
       description: |
         Missing or non-numeric `lat`, `lon` or `year`, missing
         `provider`, or neither/both of `use_case` and `variables`.
+      headers:
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimitLimit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimitRemaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimitReset"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
       description: Missing or invalid X-API-Key.
+      headers:
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimitLimit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimitRemaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimitReset"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     RateLimited:
       description: Per-key rate limit exceeded.
+      headers:
+        RateLimit-Limit:
+          $ref: "#/components/headers/RateLimitLimit"
+        RateLimit-Remaining:
+          $ref: "#/components/headers/RateLimitRemaining"
+        RateLimit-Reset:
+          $ref: "#/components/headers/RateLimitReset"
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+
+  headers:
+    RateLimitLimit:
+      description: Maximum requests allowed per window for this API key.
+      schema:
+        type: integer
+    RateLimitRemaining:
+      description: Requests remaining in the current window.
+      schema:
+        type: integer
+    RateLimitReset:
+      description: Seconds until the current window resets.
+      schema:
+        type: integer
+    RetryAfter:
+      description: Seconds to wait before retrying. Present only on 429.
+      schema:
+        type: integer
 
   schemas:
     ErrorResponse:

@@ -105,6 +105,19 @@ def test_weather_point_default_format_is_parquet(client, monkeypatch):
     assert resp.mimetype == "application/octet-stream"
 
 
+def test_weather_point_rate_limit_headers_present_on_200(client, monkeypatch):
+    _patch_get_point_weather(monkeypatch)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018&use_case=solar",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["RateLimit-Limit"] == "60"
+    assert int(resp.headers["RateLimit-Remaining"]) == 59
+    assert int(resp.headers["RateLimit-Reset"]) > 0
+    assert "Retry-After" not in resp.headers
+
+
 def test_weather_point_requires_api_key(client, monkeypatch):
     _patch_get_point_weather(monkeypatch)
     resp = client.get("/v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018")
@@ -259,6 +272,8 @@ def test_weather_point_rate_limited_is_429(monkeypatch):
         second = limited_client.get(url, headers={"X-API-Key": API_KEY})
         assert second.status_code == 429
         assert second.get_json()["error"]["code"] == errors.RATE_LIMIT_EXCEEDED
+        assert int(second.headers["Retry-After"]) > 0
+        assert second.headers["RateLimit-Remaining"] == "0"
 
 
 def test_weather_variables_discovery_endpoint(client):

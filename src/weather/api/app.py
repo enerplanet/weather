@@ -190,6 +190,34 @@ def create_app() -> Flask:
         )
         return response
 
+    @app.after_request
+    def _rate_limit_headers(response: Response) -> Response:
+        # Reads _RateLimiter's existing state directly rather than adding
+        # methods to the class -- its internals are out of scope for this
+        # change. allow() already ran once in _authenticate() for this
+        # request (or never, if auth failed first -- see the note below),
+        # so this never double-counts a hit.
+        key = request.headers.get("X-API-Key", "")
+        hits = limiter._hits.get(key)
+        remaining = max(0, limiter.max_requests - (len(hits) if hits else 0))
+        if hits:
+            elapsed = time.monotonic() - hits[0]
+            reset = max(0, int(limiter.window_seconds - elapsed) + 1)
+        else:
+            reset = int(limiter.window_seconds)
+
+        response.headers["RateLimit-Limit"] = str(limiter.max_requests)
+        response.headers["RateLimit-Remaining"] = str(remaining)
+        response.headers["RateLimit-Reset"] = str(reset)
+        if response.status_code == 429:
+            response.headers["Retry-After"] = str(reset)
+        # ponytail: on the 401/503 pre-auth-fail paths, allow() was never
+        # called this request, so `hits` reflects the last successful
+        # request's pruning, not a fresh one -- best-effort, not exact,
+        # on those two paths specifically. Exact would need a read method
+        # added inside _RateLimiter, out of scope for this change.
+        return response
+
     @app.get("/v1/health")
     def health() -> Any:
         # Liveness only -- no filesystem I/O. Archive availability is a
