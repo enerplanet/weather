@@ -99,20 +99,11 @@ info:
     name: UU-BUEM
     url: https://github.com/UU-BUEM/weather
 
-servers:
-  - url: http://127.0.0.1:8080
-    description: Local dev server
-  - url: http://127.0.0.1:8090
-    description: Docker, host port set by WEATHER_API_PORT
-
 tags:
   - name: Weather
     description: Point queries and discovery
   - name: Health
     description: Liveness check
-
-security:
-  - ApiKeyAuth: []
 
 paths:
   /v1/weather/point:
