@@ -23,9 +23,12 @@ info:
 
     1. `GET /v1/weather/variables` to see which variables exist and
        which `use_case` shortcuts group them.
+
     2. `GET /v1/weather/providers` to see which years each provider has.
+
     3. `GET /v1/weather/validate` to pre-flight-check a request (same
        parameters, no archive access) before committing to the real one.
+
     4. `GET /v1/weather/point` for the data.
 
     Example:
@@ -39,7 +42,9 @@ info:
     request with both is also a 400.
 
     - `use_case=solar` resolves to `T`, `GHI`, `DHI`, `DNI`
+
     - `use_case=wind` resolves to `WS_10M`, `U_10M`, `V_10M`
+
     - `variables=T,WS_10M` names them directly, for combinations no
       `use_case` covers
 
@@ -52,6 +57,7 @@ info:
 
     - `parquet` (default): compact binary, needs a Parquet reader such
       as pyarrow. Cheap if you already depend on pandas.
+
     - `json`: no dependency beyond a standard JSON decoder, roughly
       twice the size on the wire for a year of hourly data. The right
       choice for a Go or Node caller that would otherwise add a Parquet
@@ -61,9 +67,13 @@ info:
 
     - `400` your request is wrong: bad or missing parameters, or the
       `use_case`/`variables` rule above
+
     - `401` missing or invalid `X-API-Key`
+
     - `404` no archive exists for that provider and year
+
     - `429` rate limit exceeded, see below
+
     - `503` the archive exists but is not servable, which is a
       server-side data problem rather than a bad request. Retrying the
       same request will not help.
