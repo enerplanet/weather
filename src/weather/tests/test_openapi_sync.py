@@ -16,9 +16,12 @@ from weather.variables import USE_CASES, VARIABLES  # noqa: E402
 OPENAPI_PATH = Path(__file__).resolve().parents[3] / "docs" / "openapi.yaml"
 
 
-def _point_query_param(name: str) -> dict:
+_PATHS_WITH_VARIABLE_PARAMS = ["/v1/weather/point", "/v1/weather/validate"]
+
+
+def _query_param(path: str, name: str) -> dict:
     spec = yaml.safe_load(OPENAPI_PATH.read_text())
-    params = spec["paths"]["/v1/weather/point"]["get"]["parameters"]
+    params = spec["paths"][path]["get"]["parameters"]
     return next(p for p in params if p["name"] == name)
 
 
@@ -26,13 +29,15 @@ def test_openapi_exists():
     assert OPENAPI_PATH.is_file(), OPENAPI_PATH
 
 
-def test_use_case_enum_matches_registry():
-    enum = _point_query_param("use_case")["schema"]["enum"]
+@pytest.mark.parametrize("path", _PATHS_WITH_VARIABLE_PARAMS)
+def test_use_case_enum_matches_registry(path):
+    enum = _query_param(path, "use_case")["schema"]["enum"]
     assert set(enum) == set(USE_CASES)
 
 
-def test_variables_enum_matches_registry():
-    enum = _point_query_param("variables")["schema"]["items"]["enum"]
+@pytest.mark.parametrize("path", _PATHS_WITH_VARIABLE_PARAMS)
+def test_variables_enum_matches_registry(path):
+    enum = _query_param(path, "variables")["schema"]["items"]["enum"]
     assert set(enum) == set(VARIABLES)
 
 

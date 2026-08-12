@@ -529,6 +529,28 @@ def get_point_weather(
         If the ``pointquery`` (xarray/netcdf4) or ``solar`` (pvlib)
         extras are not installed.
     """
+    canonical = resolve_provider(provider)
+
+    resolved_variables = resolve_variables(variables=variables, use_case=use_case)
+
+    if data_dir is None:
+        data_dir = _resolve_country_dir(canonical, latitude, longitude, year)
+
+    return _DISPATCH[canonical](latitude, longitude, year, data_dir, resolved_variables)
+
+
+def resolve_provider(provider: str) -> str:
+    """Validate and canonicalize a provider name or alias.
+
+    Shared by ``get_point_weather()`` and the HTTP layer's
+    ``/v1/weather/validate`` (structural validation only, no archive
+    access).
+
+    Raises
+    ------
+    WeatherAPIError
+        If *provider* is not a recognized name or alias.
+    """
     normalized = str(provider).strip().lower().replace("_", "-")
     canonical = _ALIASES.get(normalized)
     if canonical is None:
@@ -538,10 +560,4 @@ def get_point_weather(
             f"Unknown provider: {provider!r}. Available: {available}",
             details={"provider": provider},
         )
-
-    resolved_variables = resolve_variables(variables=variables, use_case=use_case)
-
-    if data_dir is None:
-        data_dir = _resolve_country_dir(canonical, latitude, longitude, year)
-
-    return _DISPATCH[canonical](latitude, longitude, year, data_dir, resolved_variables)
+    return canonical

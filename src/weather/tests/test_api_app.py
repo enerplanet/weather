@@ -276,6 +276,51 @@ def test_weather_point_rate_limited_is_429(monkeypatch):
         assert second.headers["RateLimit-Remaining"] == "0"
 
 
+def test_weather_validate_success(client):
+    resp = client.get(
+        "/v1/weather/validate?provider=ERA5&lat=52.0&lon=5.0&year=2018&use_case=solar",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["valid"] is True
+    assert body["resolved"]["provider"] == "era5-land"  # canonical, not the "ERA5" alias given
+    assert body["resolved"]["variables"] == ["T", "GHI", "DHI", "DNI"]
+
+
+@pytest.mark.parametrize("query, expected_code", _BAD_REQUEST_CASES)
+def test_weather_validate_400_causes(client, query, expected_code):
+    # Same causes/codes as /v1/weather/point (see _BAD_REQUEST_CASES above)
+    # -- validate shares parse_point_query with point, so every one of
+    # these applies unchanged. unknown_provider is safe unmocked here too:
+    # resolve_provider() never touches the filesystem.
+    resp = client.get(f"/v1/weather/validate?{query}", headers={"X-API-Key": API_KEY})
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]["code"] == expected_code
+
+
+def test_weather_validate_requires_api_key(client):
+    resp = client.get("/v1/weather/validate?provider=merra-2&lat=52.0&lon=5.0&year=2018&use_case=solar")
+    assert resp.status_code == 401
+
+
+def test_weather_validate_never_touches_archive(client, monkeypatch):
+    """A valid /validate call must never reach get_point_weather() -- if
+    it did, this would raise and the request would 500 instead of 200."""
+    import weather
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("validate must not call get_point_weather")
+
+    monkeypatch.setattr(weather, "get_point_weather", _fail_if_called)
+    resp = client.get(
+        "/v1/weather/validate?provider=merra-2&lat=52.0&lon=5.0&year=2018&use_case=solar",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["valid"] is True
+
+
 def test_weather_variables_discovery_endpoint(client):
     resp = client.get("/v1/weather/variables", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 200
@@ -291,18 +336,18 @@ def test_weather_variables_discovery_requires_api_key(client):
 
 
 def test_health_is_liveness_only(client):
-    resp = client.get("/v1/health", headers={"X-API-Key": API_KEY})
+    resp = client.get("/v1/weather/health", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 200
     assert resp.get_json() == {"status": "ok"}
 
 
 def test_weather_providers_endpoint(client, monkeypatch):
-    import weather.api.app as app_module
+    import weather.api.views.providers as providers_module
     import weather.registry
 
     monkeypatch.setattr(weather.registry, "list_providers", lambda: ["merra-2", "cosmo-rea6"])
     monkeypatch.setattr(
-        app_module, "_available_years",
+        providers_module, "_available_years",
         lambda name: [2018] if name == "merra-2" else [],
     )
     resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
@@ -322,7 +367,7 @@ def test_weather_providers_per_item_error_uses_shared_error_shape(client, monkey
     {code, message, details?} object as every other error response --
     one shape to detect a failure with, regardless of where it appears.
     """
-    import weather.api.app as app_module
+    import weather.api.views.providers as providers_module
     import weather.registry
 
     monkeypatch.setattr(weather.registry, "list_providers", lambda: ["merra-2"])
@@ -330,7 +375,7 @@ def test_weather_providers_per_item_error_uses_shared_error_shape(client, monkey
     def _raise(name):
         raise OSError("archive directory not readable")
 
-    monkeypatch.setattr(app_module, "_available_years", _raise)
+    monkeypatch.setattr(providers_module, "_available_years", _raise)
     resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 200
     error = resp.get_json()["providers"]["merra-2"]["error"]

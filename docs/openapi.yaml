@@ -2,7 +2,7 @@ openapi: 3.0.3
 
 info:
   title: weather point-query API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     Hourly weather for a single location and year, read from
     already-processed archives. Given a provider, latitude, longitude
@@ -24,7 +24,9 @@ info:
     1. `GET /v1/weather/variables` to see which variables exist and
        which `use_case` shortcuts group them.
     2. `GET /v1/weather/providers` to see which years each provider has.
-    3. `GET /v1/weather/point` for the data.
+    3. `GET /v1/weather/validate` to pre-flight-check a request (same
+       parameters, no archive access) before committing to the real one.
+    4. `GET /v1/weather/point` for the data.
 
     Example:
 
@@ -245,6 +247,96 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/weather/validate:
+    get:
+      tags: [Weather]
+      summary: Pre-flight-check a /v1/weather/point request
+      description: |
+        Structural validation only: parameters present/numeric/in-range,
+        and `provider`/`use_case`/`variables` names recognized. Same
+        parameters as `/v1/weather/point` (no `format`, since there is no
+        encoding choice to validate). Never touches the archive --
+        `/v1/weather/point`'s own 404 already fails before opening any
+        file, so a `200` here does not itself guarantee the archive
+        exists, only that the request is well-formed.
+      operationId: validateWeatherPoint
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          description: Which reanalysis archive to read from.
+          schema:
+            type: string
+            enum: [era5-land, cosmo-rea6, merra-2]
+        - name: lat
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+          example: 48.2
+        - name: lon
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+          example: 16.4
+        - name: year
+          in: query
+          required: true
+          schema:
+            type: integer
+          example: 2018
+        - name: use_case
+          in: query
+          required: false
+          description: Named variable set. Mutually exclusive with `variables`.
+          schema:
+            type: string
+            enum: [solar, wind]
+        - name: variables
+          in: query
+          required: false
+          style: form
+          explode: false
+          description: Explicit variable names. Mutually exclusive with `use_case`.
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [T, GHI, DHI, DNI, WS_10M, U_10M, V_10M]
+          example: [T, GHI, DHI, DNI]
+      responses:
+        "200":
+          description: Request is well-formed.
+          headers:
+            RateLimit-Limit:
+              $ref: "#/components/headers/RateLimitLimit"
+            RateLimit-Remaining:
+              $ref: "#/components/headers/RateLimitRemaining"
+            RateLimit-Reset:
+              $ref: "#/components/headers/RateLimitReset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateResponse"
+              example:
+                valid: true
+                resolved:
+                  provider: era5-land
+                  variables: [T, GHI, DHI, DNI]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /v1/weather/variables:
     get:
       tags: [Weather]
@@ -325,13 +417,17 @@ paths:
         "429":
           $ref: "#/components/responses/RateLimited"
 
-  /v1/health:
+  /v1/weather/health:
     get:
       tags: [Health]
       summary: Liveness check
       description: |
         Does no filesystem I/O. Use /v1/weather/providers to check
-        whether archives are actually available.
+        whether archives are actually available. Nested under `/weather/`
+        rather than a bare `/v1/health` -- other services reached through
+        the same Orchestrator expose their own `/health` too, and this
+        avoids a path collision if those are ever aggregated behind one
+        host.
       operationId: getHealth
       responses:
         "200":
@@ -460,6 +556,31 @@ components:
               type: object
               description: Optional, free-form, no fixed schema.
               additionalProperties: true
+
+    ValidateResponse:
+      type: object
+      required: [valid, resolved]
+      properties:
+        valid:
+          type: boolean
+          enum: [true]
+        resolved:
+          type: object
+          description: |
+            What the request resolves to -- `provider` is the canonical
+            name (e.g. `era5-land`, even if the request gave an alias
+            like `era5`), `variables` is the resolved list (expanded from
+            `use_case` if that's what was given).
+          required: [provider, variables]
+          properties:
+            provider:
+              type: string
+              enum: [era5-land, cosmo-rea6, merra-2]
+            variables:
+              type: array
+              items:
+                type: string
+                enum: [T, GHI, DHI, DNI, WS_10M, U_10M, V_10M]
 
     WeatherPointJSON:
       type: object

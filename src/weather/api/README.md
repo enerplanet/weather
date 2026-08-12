@@ -35,7 +35,20 @@ registry). `GET /v1/weather/variables` lists every variable's name/
 unit/description and every `use_case`'s members, so a caller doesn't
 need to already know the meteorological variable names.
 
-`GET /v1/health` → liveness only, `{"status": "ok"}`, no filesystem I/O.
+`GET /v1/weather/validate?provider=...&lat=...&lon=...&year=...&use_case=...`
+→ same parameters as `/v1/weather/point`, structural validation only
+(parameters present/numeric/in-range, provider/variable/use_case names
+recognized) -- no archive access. `{"valid": true, "resolved": {"provider":
+"era5-land", "variables": [...]}}` on success, the same `{"error": ...}`
+shape as every other endpoint otherwise. Lets a caller (the Orchestrator)
+pre-flight-check a request without paying for the real query.
+`/v1/weather/point`'s own 404 already fails before opening any file, so
+there's no separate "does the archive exist" check here.
+
+`GET /v1/weather/health` → liveness only, `{"status": "ok"}`, no
+filesystem I/O. Nested under `/weather/`, not a bare `/v1/health` --
+other services reached through the same Orchestrator expose their own
+`/health` too.
 
 `GET /v1/weather/providers` → per-provider list of years with a processed
 archive, derived from filenames already on disk. Deliberately does not

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: `GET /v1/health` moved to `GET /v1/weather/health` --
+  other services reached through the same Orchestrator expose their own
+  `/health` too; nesting under `/weather/` avoids a path collision if
+  those are ever aggregated behind one host. See #14.
 - **Breaking**: `GET /v1/weather/point`'s `format=json` response nests
   variables under a `variables` object instead of placing them as
   top-level keys alongside `index`
@@ -45,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
+- `docs/openapi.yaml`: version bumped `0.2.0` -> `0.3.0` for the new
+  `/v1/weather/validate` endpoint and the `/v1/health` rename below.
+  See #14.
 - `docs/openapi.yaml`: version bumped `0.1.0` -> `0.2.0` for the
   breaking response/error shape changes above. New
   `openapi-spec-validator`-backed test keeps the spec itself validating
@@ -59,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `GET /v1/weather/validate` -- pre-flight-checks a `/v1/weather/point`
+  request (same parameters) without archive access: parameters
+  present/numeric/in-range, `provider`/`use_case`/`variables` names
+  recognized. `{"valid": true, "resolved": {"provider", "variables"}}`
+  on success, same `{"error": ...}` shape as every other endpoint
+  otherwise. Requested by the Orchestrator dev, matching MEME's own
+  `/validate`. See #14.
 - Every `weather serve` response now carries `RateLimit-Limit`,
   `RateLimit-Remaining` and `RateLimit-Reset` headers; a `429` also
   carries `Retry-After`. Documented in `docs/openapi.yaml` on every

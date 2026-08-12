@@ -25,6 +25,8 @@ pytest.importorskip("pvlib")
 from weather import get_point_weather  # noqa: E402
 from weather.common.dni_reconstruction import reconstruct_dni_dhi  # noqa: E402
 from weather.common.geo_lookup import find_nearest_cell  # noqa: E402
+from weather.errors import WeatherAPIError  # noqa: E402
+from weather.point_query import resolve_provider  # noqa: E402
 
 REQUIRED_COLUMNS = ["T", "GHI", "DHI", "DNI"]
 
@@ -63,6 +65,25 @@ class TestGeoLookup:
         ds = xr.Dataset({"dummy": (("y", "x"), np.zeros((2, 2)))})
         with pytest.raises(KeyError):
             find_nearest_cell(ds, 50.0, 4.0)
+
+
+class TestResolveProvider:
+    def test_canonical_passthrough(self) -> None:
+        assert resolve_provider("era5-land") == "era5-land"
+        assert resolve_provider("cosmo-rea6") == "cosmo-rea6"
+        assert resolve_provider("merra-2") == "merra-2"
+
+    def test_aliases_resolve_to_canonical(self) -> None:
+        assert resolve_provider("era5") == "era5-land"
+        assert resolve_provider("cosmo") == "cosmo-rea6"
+        assert resolve_provider("merra2") == "merra-2"
+        assert resolve_provider("ERA5") == "era5-land"  # case-insensitive
+        assert resolve_provider("merra_2") == "merra-2"  # underscore/hyphen interchangeable
+
+    def test_unknown_provider_raises(self) -> None:
+        with pytest.raises(WeatherAPIError) as exc_info:
+            resolve_provider("not-a-provider")
+        assert exc_info.value.code == "unknown_provider"
 
 
 class TestDniReconstruction:
