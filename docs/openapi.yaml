@@ -59,9 +59,7 @@ info:
       as pyarrow. Cheap if you already depend on pandas.
 
     - `json`: no dependency beyond a standard JSON decoder, roughly
-      twice the size on the wire for a year of hourly data. The right
-      choice for a Go or Node caller that would otherwise add a Parquet
-      reader for this one endpoint.
+      twice the size on the wire for a year of hourly data.
 
     ## Errors
 
@@ -74,7 +72,7 @@ info:
 
     - `429` rate limit exceeded, see below
 
-    - `503` the archive exists but is not servable, which is a
+    - `503` the archive exists but is not possible to serve, which is a
       server-side data problem rather than a bad request. Retrying the
       same request will not help.
 
