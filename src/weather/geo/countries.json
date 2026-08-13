@@ -1,0 +1,182 @@
+{
+  "germany": {
+    "north": 54.983,
+    "west": 5.988,
+    "south": 47.302,
+    "east": 15.016
+  },
+  "france": {
+    "north": 51.089,
+    "west": -5.142,
+    "south": 42.333,
+    "east": 8.231
+  },
+  "spain": {
+    "north": 43.791,
+    "west": -9.301,
+    "south": 36,
+    "east": 3.315
+  },
+  "italy": {
+    "north": 47.092,
+    "west": 6.627,
+    "south": 36.649,
+    "east": 18.52
+  },
+  "uk": {
+    "north": 58.635,
+    "west": -8.182,
+    "south": 49.959,
+    "east": 1.769
+  },
+  "united_kingdom": {
+    "north": 58.635,
+    "west": -8.182,
+    "south": 49.959,
+    "east": 1.769
+  },
+  "poland": {
+    "north": 54.836,
+    "west": 14.123,
+    "south": 49.002,
+    "east": 24.146
+  },
+  "netherlands": {
+    "north": 53.472,
+    "west": 3.358,
+    "south": 50.751,
+    "east": 7.21
+  },
+  "belgium": {
+    "north": 51.505,
+    "west": 2.546,
+    "south": 49.497,
+    "east": 6.404
+  },
+  "austria": {
+    "north": 49.021,
+    "west": 9.531,
+    "south": 46.372,
+    "east": 17.161
+  },
+  "switzerland": {
+    "north": 47.808,
+    "west": 5.956,
+    "south": 45.818,
+    "east": 10.492
+  },
+  "portugal": {
+    "north": 42.154,
+    "west": -9.5,
+    "south": 36.96,
+    "east": -6.189
+  },
+  "sweden": {
+    "north": 69.06,
+    "west": 11.109,
+    "south": 55.337,
+    "east": 24.167
+  },
+  "norway": {
+    "north": 71.185,
+    "west": 4.65,
+    "south": 57.96,
+    "east": 31.078
+  },
+  "finland": {
+    "north": 70.092,
+    "west": 20.649,
+    "south": 59.808,
+    "east": 31.587
+  },
+  "denmark": {
+    "north": 57.752,
+    "west": 8.089,
+    "south": 54.568,
+    "east": 15.159
+  },
+  "ireland": {
+    "north": 55.38,
+    "west": -10.478,
+    "south": 51.422,
+    "east": -5.998
+  },
+  "czech_republic": {
+    "north": 51.058,
+    "west": 12.091,
+    "south": 48.552,
+    "east": 18.859
+  },
+  "czechia": {
+    "north": 51.058,
+    "west": 12.091,
+    "south": 48.552,
+    "east": 18.859
+  },
+  "romania": {
+    "north": 48.265,
+    "west": 20.262,
+    "south": 43.619,
+    "east": 29.691
+  },
+  "hungary": {
+    "north": 48.585,
+    "west": 16.112,
+    "south": 45.737,
+    "east": 22.898
+  },
+  "greece": {
+    "north": 41.749,
+    "west": 19.374,
+    "south": 34.802,
+    "east": 29.645
+  },
+  "croatia": {
+    "north": 46.555,
+    "west": 13.49,
+    "south": 42.393,
+    "east": 19.427
+  },
+  "bulgaria": {
+    "north": 44.215,
+    "west": 22.357,
+    "south": 41.236,
+    "east": 28.612
+  },
+  "slovakia": {
+    "north": 49.603,
+    "west": 16.847,
+    "south": 47.728,
+    "east": 22.558
+  },
+  "slovenia": {
+    "north": 46.877,
+    "west": 13.383,
+    "south": 45.421,
+    "east": 16.607
+  },
+  "luxembourg": {
+    "north": 50.183,
+    "west": 5.734,
+    "south": 49.448,
+    "east": 6.531
+  },
+  "estonia": {
+    "north": 59.676,
+    "west": 21.774,
+    "south": 57.516,
+    "east": 28.21
+  },
+  "latvia": {
+    "north": 58.082,
+    "west": 20.971,
+    "south": 55.675,
+    "east": 28.241
+  },
+  "lithuania": {
+    "north": 56.45,
+    "west": 20.932,
+    "south": 53.901,
+    "east": 26.836
+  }
+}
