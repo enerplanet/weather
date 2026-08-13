@@ -62,7 +62,7 @@ RUN conda env create -f /tmp/weather_env.yml \
 # ── Runtime stage ──────────────────────────────────────────────────────────
 FROM continuumio/miniconda3:24.1.2-0
 
-LABEL org.opencontainers.image.source="https://github.com/UU-BUEM/weather"
+LABEL org.opencontainers.image.source="https://github.com/enerplanet/weather"
 LABEL org.opencontainers.image.description="COSMO-REA6 weather pipeline — UU-BUEM"
 LABEL org.opencontainers.image.licenses="MIT"
 
