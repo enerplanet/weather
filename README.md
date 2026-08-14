@@ -191,8 +191,8 @@ been produced by a normal pipeline run for that `(provider, year)`.
 For a caller that can't import this package directly, `weather serve`
 exposes the same point query over HTTP.
 
-Interactive reference (Swagger UI, renders `docs/openapi.yaml`):
-https://enerplanet.github.io/weather/
+Interactive reference (Swagger UI, renders `docs/openapi/openapi.yaml`):
+https://enerplanet.github.io/weather/openapi/
 
 Full design, auth, and run instructions: `src/weather/api/README.md`.
 

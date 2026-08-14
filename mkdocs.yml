@@ -1,0 +1,116 @@
+# Project information
+site_name: weather
+site_author: enerplanet
+site_description: >-
+  weather: COSMO-REA6 / ERA5-Land / MERRA-2 download, decompression, and point-query pipeline.
+site_url: https://enerplanet.github.io/weather
+
+# Repository
+repo_name: enerplanet/weather
+repo_url: https://github.com/enerplanet/weather
+edit_uri: edit/main/docs/
+
+# Theme configuration — mirrors buem-gateway's/THD-Spatial-AI/ignis's docs
+# theme for a consistent look across the building-simulation namespace's
+# own repos.
+theme:
+  name: material
+  features:
+    - announce.dismiss
+    - content.action.edit
+    - content.action.view
+    - content.code.annotate
+    - content.code.copy
+    - content.tooltips
+    - navigation.expand
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.path
+    - navigation.tracking
+    - navigation.sections
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+    - toc.integrate
+  language: en
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/link
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/toggle-switch-off
+        name: Switch to system preference
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+# Plugins
+plugins:
+  - search:
+      separator: '[\s​\-_,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+
+# Extensions — pymdownx.superfences custom mermaid fence is required for
+# Mermaid diagrams to render under Material; see CLAUDE.md.
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+# Page tree
+nav:
+  - Home: index.md
+  - Getting started:
+      - Pipeline architecture: parallelization.md
+      - FAQ: qa.md
+      - Debugging: debugging.md
+  - Provider guides:
+      - MERRA-2 pipeline: MERRA2_PIPELINE_GUIDE.md
+      - MERRA-2 bulk run: BULK_RUN_GUIDE_MERRA2.md
+      - ERA5-Land bulk run: BULK_RUN_GUIDE_ERA5-LAND.md
+      - ERA5-Land download & logging: DOWNLOAD_AND_LOGGING.md
+      - Country-scoped archives: COUNTRY_SCOPED_ARCHIVES.md
+  - Methodology:
+      - Cross-provider differences: provider_differences.md
+      - DNI/DHI decomposition: dni_methodology.md
+      - TMY percentile selection: percentile_methodology.md
+  - Contributing: git-push-workflow.md
+
+# Copyright
+copyright: |
+  &copy; 2026 <a href="https://github.com/enerplanet" target="_blank" rel="noopener">EnerPlanET</a> · MIT License
