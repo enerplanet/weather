@@ -186,6 +186,16 @@ Install just enough for this (no GRIB/download stack): `pip install
 weather[pointquery,solar]`. Requires a provider archive that's already
 been produced by a normal pipeline run for that `(provider, year)`.
 
+## HTTP API (`weather serve`)
+
+For a caller that can't import this package directly, `weather serve`
+exposes the same point query over HTTP.
+
+Interactive reference (Swagger UI, renders `docs/openapi.yaml`):
+https://enerplanet.github.io/weather/
+
+Full design, auth, and run instructions: `src/weather/api/README.md`.
+
 ## Country cropping (`weather geo`)
 
 ```bash

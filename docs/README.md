@@ -20,6 +20,7 @@ All files are Markdown; linting rules are in `/.markdownlint.json`
 | [BULK_RUN_GUIDE_ERA5-LAND.md](BULK_RUN_GUIDE_ERA5-LAND.md) | ERA5-Land bulk multi-year run: bottleneck analysis, `scripts/run_era5_bulk.sh`, parallelization, disk budget |
 | [BULK_RUN_GUIDE_MERRA2.md](BULK_RUN_GUIDE_MERRA2.md) | MERRA-2 bulk multi-year run: bottleneck analysis, `scripts/run_merra2_bulk.sh`, parallelization, disk budget |
 | [DOWNLOAD_AND_LOGGING.md](DOWNLOAD_AND_LOGGING.md) | ERA5-Land: parallel-range-request download speedup, server logging setup |
+| [index.html](index.html) | Interactive Swagger UI for the `weather serve` HTTP API, renders [openapi.yaml](openapi.yaml); also live at <https://enerplanet.github.io/weather/> |
 | [git-push-workflow.md](git-push-workflow.md) | Branch and push conventions for contributors |
 
 ---
@@ -41,6 +42,7 @@ All files are Markdown; linting rules are in `/.markdownlint.json`
 ## Related resources
 
 - Root `README.md` — quick-start installation and run instructions.
+- `src/weather/api/README.md` — HTTP API design, auth, and running `weather serve`.
 - `src/weather/tests/README.md` — which test script to run and in what order.
 - `src/weather/common/README.md` — what each shared utility module does.
 - `src/weather/providers/README.md` — provider pattern, how to add a new provider.
