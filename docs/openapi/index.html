@@ -11,11 +11,12 @@
   </head>
   <body>
     <!-- Swagger UI via CDN, deliberately unpinned: docs-only page, no build
-         step. "Try it out" is disabled (supportedSubmitMethods: []) --
-         weather serve has no CORS support (rejected 2026-08-10: real
-         consumer is server-to-server, not a browser, so live requests
-         from this page have no genuine use case), so leaving it enabled
-         would just present a button that fails with a CORS error.
+         step. "Try it out" is enabled for GET only (supersedes the
+         2026-08-10 rejection): weather serve still has no CORS support,
+         so clicking Execute against a cross-origin deployment will fail,
+         but the panel's real value is the request/curl snippet it builds
+         from your filled-in params -- copy that and run it locally
+         instead of hand-typing the URL and query string.
          Renders openapi.yaml directly, which stays the single source of
          truth. Matches buem-gateway's docs viewer for a consistent look
          across the two repos' API docs. -->
@@ -26,7 +27,7 @@
         window.ui = SwaggerUIBundle({
           url: "./openapi.yaml",
           dom_id: "#swagger-ui",
-          supportedSubmitMethods: [],
+          supportedSubmitMethods: ["get"],
         });
       };
     </script>
