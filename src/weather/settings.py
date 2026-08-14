@@ -29,6 +29,11 @@ To override for a single run without touching ``.env``::
 ``.env`` file keys (copy ``.env.example`` to ``.env`` and adjust)::
 
     WEATHER_DATA_DIR   # root for all provider data
+    WEATHER_REGION     # single country (see geo.countries) to scope ERA5-Land
+                       # and MERRA-2 WORK_DIR + AREA to automatically; does
+                       # NOT apply to COSMO-REA6 (no AREA parameter exists
+                       # for it) and does NOT support multiple countries --
+                       # see docs/COUNTRY_SCOPED_ARCHIVES.md
     COSMO_WORK_DIR     # COSMO-REA6 working directory
     COSMO_YEAR         # four-digit year to process
     COSMO_BASE_URL     # DWD OpenData HTTPS base URL
@@ -63,6 +68,8 @@ import os
 from pathlib import Path
 
 from .common.env import data_root, load_repo_env
+from .geo.bbox import BBox
+from .geo.countries import get_bbox, normalize_country
 
 # Load .env exactly once at import time.
 load_repo_env()
@@ -97,13 +104,50 @@ class EnvSettings:
         """Root directory for all provider data (WEATHER_DATA_DIR)."""
         return data_root()
 
+    @staticmethod
+    def region_bbox() -> BBox | None:
+        """Bounding box for ``WEATHER_REGION``, or ``None`` if unset.
+
+        Raises ``ValueError`` (via :func:`~weather.geo.countries.get_bbox`)
+        if set to a name not in :mod:`weather.geo.countries` -- fails fast
+        on a typo rather than silently doing nothing.
+        """
+        region = os.getenv("WEATHER_REGION", "").strip()
+        if not region:
+            return None
+        return get_bbox(region)
+
+    @staticmethod
+    def _region_scoped(base: Path) -> Path:
+        """Append ``WEATHER_REGION``'s normalized name to *base*, if set.
+
+        Returns *base* unchanged when unset -- today's flat layout.
+        Validates the region (via :meth:`region_bbox`) before use, so an
+        unknown name raises here instead of quietly creating an empty
+        directory nothing ever populates.
+        """
+        region = os.getenv("WEATHER_REGION", "").strip()
+        if not region:
+            return base
+        EnvSettings.region_bbox()
+        return base / normalize_country(region)
+
     # ------------------------------------------------------------------
     # COSMO-REA6
     # ------------------------------------------------------------------
 
     @staticmethod
     def cosmo_work_dir() -> Path:
-        """COSMO-REA6 working root (COSMO_WORK_DIR)."""
+        """COSMO-REA6 working root (COSMO_WORK_DIR).
+
+        Deliberately NOT scoped by ``WEATHER_REGION`` (unlike
+        :meth:`era5_work_dir`/:meth:`merra2_work_dir`) -- COSMO-REA6 has
+        no AREA parameter anywhere and always downloads the full European
+        domain, so honoring a region here would write a whole-Europe
+        archive into a directory named after one country. Use
+        ``weather geo crop`` to produce a genuinely region-scoped COSMO
+        file; see docs/COUNTRY_SCOPED_ARCHIVES.md.
+        """
         raw = os.getenv(
             "COSMO_WORK_DIR",
             str(data_root() / "cosmo_rea6"),
@@ -261,12 +305,17 @@ class EnvSettings:
 
     @staticmethod
     def merra2_work_dir() -> Path:
-        """MERRA-2 working root (MERRA_WORK_DIR)."""
-        raw = os.getenv(
-            "MERRA_WORK_DIR",
-            str(data_root() / "merra2"),
-        )
-        return Path(raw).expanduser().resolve()
+        """MERRA-2 working root (MERRA_WORK_DIR).
+
+        Defaults to ``<data_root>/merra2/<region>`` when ``WEATHER_REGION``
+        is set (see :meth:`_region_scoped`), else ``<data_root>/merra2`` --
+        unchanged from before ``WEATHER_REGION`` existed. Explicit
+        ``MERRA_WORK_DIR`` always wins over both.
+        """
+        raw = os.getenv("MERRA_WORK_DIR", "").strip()
+        if raw:
+            return Path(raw).expanduser().resolve()
+        return EnvSettings._region_scoped(data_root() / "merra2").resolve()
 
     @staticmethod
     def merra2_download_dir() -> Path:
@@ -408,12 +457,18 @@ class EnvSettings:
 
     @staticmethod
     def era5_work_dir() -> Path:
-        """ERA5-Land working root (ERA5_WORK_DIR)."""
-        raw = os.getenv(
-            "ERA5_WORK_DIR",
-            str(data_root() / "era5_land"),
-        )
-        return Path(raw).expanduser().resolve()
+        """ERA5-Land working root (ERA5_WORK_DIR).
+
+        Defaults to ``<data_root>/era5_land/<region>`` when
+        ``WEATHER_REGION`` is set (see :meth:`_region_scoped`), else
+        ``<data_root>/era5_land`` -- unchanged from before
+        ``WEATHER_REGION`` existed. Explicit ``ERA5_WORK_DIR`` always wins
+        over both.
+        """
+        raw = os.getenv("ERA5_WORK_DIR", "").strip()
+        if raw:
+            return Path(raw).expanduser().resolve()
+        return EnvSettings._region_scoped(data_root() / "era5_land").resolve()
 
     @staticmethod
     def era5_download_dir() -> Path:
