@@ -407,15 +407,21 @@ class EnvSettings:
     def merra2_area() -> list[float]:
         """Geographic bounding box for OPeNDAP requests (MERRA2_AREA).
 
-        Order is ``[North, West, South, East]`` in degrees. Required --
-        unset or blank raises, rather than silently defaulting to a
+        Order is ``[North, West, South, East]`` in degrees. Falls back to
+        ``WEATHER_REGION``'s bbox (see :meth:`region_bbox`) when unset;
+        with neither set, raises rather than silently defaulting to a
         whole-Europe download (see docs/COUNTRY_SCOPED_ARCHIVES.md for
-        computing the box for a country set).
+        computing the box for a country set, or scoping to more than one
+        country -- WEATHER_REGION only covers a single country).
         """
         raw = os.getenv("MERRA2_AREA", "").strip()
         if not raw:
+            region_bbox = EnvSettings.region_bbox()
+            if region_bbox is not None:
+                return region_bbox.to_area_list()
             raise ValueError(
-                "MERRA2_AREA is required (format 'N,W,S,E') -- refusing to "
+                "MERRA2_AREA is required (format 'N,W,S,E'), or set "
+                "WEATHER_REGION to a single known country -- refusing to "
                 "default to a whole-Europe download."
             )
         parts = [p.strip() for p in raw.split(",") if p.strip()]

@@ -21,19 +21,25 @@ from .downloaded_attributes import ATTRIBUTES
 
 
 def _area_from_env() -> list[float]:
-    """Parse required ``ERA5_AREA`` = "N,W,S,E" into a list.
+    """Parse ``ERA5_AREA`` = "N,W,S,E" into a list.
 
-    CDS expects ``area = [North, West, South, East]`` in degrees.
-    Required -- unset or blank raises, rather than silently defaulting
-    to a global download (which is both far larger and hits eccodes
-    memory-allocation failures on large global fields). See
-    docs/COUNTRY_SCOPED_ARCHIVES.md for computing the box for a country
-    set.
+    CDS expects ``area = [North, West, South, East]`` in degrees. Falls
+    back to ``WEATHER_REGION``'s bbox (see
+    :meth:`EnvSettings.region_bbox`) when unset; with neither set,
+    raises rather than silently defaulting to a global download (which
+    is both far larger and hits eccodes memory-allocation failures on
+    large global fields). See docs/COUNTRY_SCOPED_ARCHIVES.md for
+    computing the box for a country set, or scoping to more than one
+    country -- WEATHER_REGION only covers a single country.
     """
     raw = os.getenv("ERA5_AREA", "").strip()
     if not raw:
+        region_bbox = EnvSettings.region_bbox()
+        if region_bbox is not None:
+            return region_bbox.to_area_list()
         raise ValueError(
-            "ERA5_AREA is required (format 'N,W,S,E') -- refusing to "
+            "ERA5_AREA is required (format 'N,W,S,E'), or set "
+            "WEATHER_REGION to a single known country -- refusing to "
             "default to a global download."
         )
     parts = [p.strip() for p in raw.split(",") if p.strip()]
