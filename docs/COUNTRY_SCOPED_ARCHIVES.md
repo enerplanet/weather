@@ -19,6 +19,36 @@ and the two gotchas that make this easy to get subtly wrong.
       already-built archive into per-country files after the fact;
       not a substitute for scoping the request itself.
 
+## WEATHER_REGION: automatic scoping for a single country
+
+For the common case of scoping a run to **one** country, set
+`WEATHER_REGION` (e.g. `WEATHER_REGION=germany`, any name from `weather
+geo list`) instead of hand-computing `ERA5_AREA`/`MERRA2_AREA` and a
+matching `WORK_DIR`. It derives both automatically:
+
+- `ERA5_AREA`/`MERRA2_AREA` default to the region's bbox (via
+  `weather.geo.countries.get_bbox`) whenever they aren't set explicitly.
+- `EnvSettings.era5_work_dir()`/`merra2_work_dir()` default to
+  `<provider>/<region>/` instead of the flat `<provider>/` root — the
+  per-scope directory Gotcha 3 below requires, without needing a
+  hand-crafted `WEATHER_ENV_FILE` copy.
+
+An explicit `ERA5_AREA`/`MERRA2_AREA`/`ERA5_WORK_DIR`/`MERRA_WORK_DIR`
+always wins over `WEATHER_REGION`, so nothing below (the manual
+per-scope `.env` approach, and everything in Gotchas 1-3) stops working.
+
+!!! warning "Single country only — not a replacement for the union workflow below"
+    This does not replace the multi-country union this page's own worked
+    example uses (the AT/NL/DE/CZ box further down) — there is no
+    `WEATHER_REGION=germany,austria,...`. For a union of countries, or
+    any bbox not in `weather geo list`, the manual `WEATHER_ENV_FILE`
+    approach in the rest of this page is still how you do it.
+
+**Does not apply to COSMO-REA6** — it has no `AREA` parameter (see
+below) and always downloads the full European domain, so `WEATHER_REGION`
+does not affect its `WORK_DIR`. Use `weather geo crop` (see the last
+section on this page) to produce a genuinely region-scoped COSMO file.
+
 ## The mechanism
 
 `ERA5_AREA` and `MERRA2_AREA` (`.env`, order `North,West,South,East`)
@@ -170,6 +200,9 @@ stop — not just as a nice-to-have organizational choice, but because
 mixing them silently breaks the boundary-repair mechanism.** A
 per-country (or per-scope) directory layout isn't optional once more
 than one AREA is ever used against the same provider over time.
+`WEATHER_REGION` (see above) now gets this automatically for a single
+country; a multi-country union like AT/NL/DE/CZ below still needs the
+manual `WEATHER_ENV_FILE` approach this page describes.
 
 ## Results — whole Europe vs. AT/NL/DE/CZ, one month each
 
