@@ -3,8 +3,16 @@ name: CI
 "on":
   push:
     branches: ["main", "develop", "enerplanet"]
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "infrastructure/env/weather_env.yml"
   pull_request:
     branches: ["main", "enerplanet"]
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "infrastructure/env/weather_env.yml"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
