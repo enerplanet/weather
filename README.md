@@ -15,6 +15,7 @@ Currently, this pipeline standardizes three weather databases:
 <!-- markdownlint-disable MD013 -->
 [![CI](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml)
 [![Release](https://github.com/UU-BUEM/weather/actions/workflows/release.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/release.yml)
+[![MkDocs](https://github.com/enerplanet/weather/actions/workflows/docs.yml/badge.svg?branch=enerplanet)](https://enerplanet.github.io/weather)
 <!-- markdownlint-enable MD013 -->
 
 Standalone weather processing repository for `UU-BUEM`.
