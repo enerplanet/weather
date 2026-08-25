@@ -369,6 +369,27 @@ def _get_point_cosmo_rea6(
                 f"{year} first (weather run --provider cosmo-rea6 --year "
                 f"{year})."
             )
+        # This is the flat, non-country-scoped fallback (no country's
+        # bounding box covers this point -- see _resolve_country_dir) and
+        # unlike a country-scoped archive it is not guaranteed to be a
+        # complete year: only whichever months the pipeline has been run
+        # for exist here. A caller asking for one year/location should
+        # never silently get back a handful of months with a 200 -- fail
+        # loudly instead, the same way an unrepaired ERA5-Land boundary
+        # month does below.
+        found_months = {p.name.removeprefix(f"COSMO_REA6_{year}_")[:2] for p in paths}
+        missing_months = sorted(f"{m:02d}" for m in range(1, 13) if f"{m:02d}" not in found_months)
+        if missing_months:
+            raise RuntimeError(
+                f"cosmo-rea6 archive for {year} under {out_dir} only has "
+                f"month(s) {sorted(found_months)} processed; missing "
+                f"{missing_months}. ({latitude}, {longitude}) falls outside "
+                "every country-scoped archive (see COUNTRIES in "
+                "weather.geo.countries), so it fell back to this flat, "
+                "partial archive. Run the pipeline for the missing months, "
+                "or query a location inside a country-scoped archive with "
+                "full-year coverage."
+            )
         # Open each monthly file independently rather than
         # xr.open_mfdataset(..., combine="by_coords"): a real COSMO
         # archive can straddle the lat/lon-retention fix (some months
