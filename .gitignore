@@ -30,6 +30,7 @@ data/
 *.grb.bz2
 *.part
 *_bulk_*.log
+/logs/
 
 # CI test fixtures (see fixtures/ci/README.md) -- real, small, intentionally
 # git-tracked subset of provider output for downstream consumers' CI (buem).

@@ -15,19 +15,29 @@ import sys
 from pathlib import Path
 
 
-def run_cmd(cmd: list[str], description: str = "") -> tuple[int, str, str]:
-    """Run command and return (exit_code, stdout, stderr)."""
+def run_cmd(
+    cmd: list[str], description: str = "", timeout: int = 60
+) -> tuple[int, str, str]:
+    """Run command and return (exit_code, stdout, stderr).
+
+    Parameters
+    ----------
+    timeout : int
+        Seconds before giving up (default 60 -- fine for quick checks
+        like ``docker --version``, but far too short for anything that
+        does real work, e.g. a cold ``docker build``; override per call).
+    """
     print(f"  → {' '.join(cmd)}")
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=timeout,
         )
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
-        return 1, "", "Timeout"
+        return 1, "", f"Timeout after {timeout}s"
     except Exception as exc:
         return 1, "", str(exc)
 
@@ -154,24 +164,35 @@ def check_docker() -> bool:
                 ".",
             ],
             "Docker build",
+            # A cold build (base image pull + full conda env solve/install)
+            # routinely exceeds run_cmd()'s 60s default -- that default was
+            # never actually enough for what this docstring promises, it
+            # just went unnoticed while a stale weather:test image was
+            # always found first and this branch never ran for real.
+            timeout=900,
         )
         if code != 0:
             print(f"  ✗ Docker build failed: {err[-500:]}")
             return False
     print("  ✓ weather:test image OK")
 
-    # Test CLI in container
+    # Test CLI in container. Two things the naive call gets wrong:
+    # 1. weather:test is a deps-only image (see Dockerfile's own header
+    #    comment) -- the `weather` package is never installed inside it;
+    #    source is bind-mounted at /app/src at runtime
+    #    (PYTHONPATH=/app/src in the image), matching every usage example
+    #    in the Dockerfile itself. Without this mount, any command fails
+    #    with "No module named weather" regardless of whether the image
+    #    build itself succeeded.
+    # 2. ENTRYPOINT is entrypoint.sh, not python -- with PIPELINE_MODE
+    #    unset it already runs `exec python -m weather "$@"` (its
+    #    passthrough case), so the docker run CMD should be just the
+    #    weather subcommand ("info"), not "python -m weather info" --
+    #    passing the full command doubles it up and "python" ends up as
+    #    weather's literal first CLI arg.
+    src_mount = f"{Path.cwd() / 'src'}:/app/src:ro"
     code, out, err = run_cmd(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "weather:test",
-            "python",
-            "-m",
-            "weather",
-            "info",
-        ],
+        ["docker", "run", "--rm", "-v", src_mount, "weather:test", "info"],
         "Docker CLI",
     )
     if code != 0:

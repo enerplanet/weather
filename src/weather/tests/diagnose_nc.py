@@ -29,6 +29,9 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 #: A plausible hourly GHI flux never exceeds this (W/m^2); the solar
 #: constant is ~1361 and surface GHI tops out around 1100-1200.
 _MAX_PLAUSIBLE_GHI = 1400.0
@@ -64,8 +67,6 @@ def main() -> None:
     if not path.exists():
         sys.exit(f"not found: {path}")
 
-    import numpy as np
-    import pandas as pd
     import xarray as xr
 
     ds = xr.open_dataset(path)

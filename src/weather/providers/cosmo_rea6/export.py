@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pandas as pd
+
 if TYPE_CHECKING:
-    import pandas as pd  # noqa: F401  # type: ignore[import-untyped]
     import xarray  # noqa: F401  # type: ignore[import-untyped]
 
 logger = logging.getLogger(__name__)
@@ -138,7 +140,6 @@ def export_netcdf(
     # Compute one variable at a time to limit peak memory usage —
     # loading all variables simultaneously would require ~12 GiB,
     # but sequential computation peaks at ~4 GiB per variable.
-    import time
     t0 = time.perf_counter()
     logger.info("Computing dask arrays into memory (variable-by-variable)...")
     for var_name in list(ds.data_vars):
@@ -210,8 +211,6 @@ def export_single_point_csv(
     format expected by :class:`~weather.from_csv.CsvWeatherData`.
     DNI must be reconstructed by the thermal model using pvlib DISC from GHI.
     """
-    import pandas as pd  # noqa: F811
-
     logger.info(
         "Extracting single point (rlat=%d, rlon=%d) to %s",
         rlat_idx, rlon_idx, output_path,

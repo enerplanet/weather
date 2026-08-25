@@ -265,13 +265,46 @@ class TestGetPointWeatherCosmo:
         )
         out_dir = tmp_path / "cosmo_rea6" / "output"
         out_dir.mkdir(parents=True)
-        ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
 
         df = get_point_weather(
             50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
         )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
+
+    def test_cosmo_annual_filename_matches_netcdfmerger_convention(
+        self, tmp_path, hourly_times
+    ) -> None:
+        """Regression check: point_query's annual-file lookup must match
+        the filename NetCDFMerger.merge() (and weather fetch --concatenate)
+        actually produce (COSMO_REA6_<year>_annual_all_attrs.nc), not the
+        unrelated COSMO_REA6_<year>.nc a path-less export_netcdf() call
+        would produce. A file at the OLD wrong name must be ignored (falls
+        back to the monthly-file path, which also isn't present here, so
+        this should raise rather than silently reading stale/wrong data)."""
+        shape = (len(hourly_times), 3, 3)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(3),
+                "x": np.arange(3),
+                "latitude": (("y", "x"), np.zeros((3, 3)) + 50.0),
+                "longitude": (("y", "x"), np.zeros((3, 3)) + 4.0),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")  # old, no-longer-recognised name
+
+        with pytest.raises(FileNotFoundError, match="annual_all_attrs"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+            )
 
     def test_cosmo_archive_without_lat_lon_raises(self, tmp_path, hourly_times) -> None:
         """Regression check for the exact gap found in review: already-completed
@@ -287,7 +320,7 @@ class TestGetPointWeatherCosmo:
         )
         out_dir = tmp_path / "cosmo_rea6" / "output"
         out_dir.mkdir(parents=True)
-        ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
 
         with pytest.raises(KeyError):
             get_point_weather(
@@ -320,7 +353,7 @@ class TestGetPointWeatherCosmo:
         )
         out_dir = tmp_path / "cosmo_rea6" / "output"
         out_dir.mkdir(parents=True)
-        ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
 
         df = get_point_weather(
             50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="wind"

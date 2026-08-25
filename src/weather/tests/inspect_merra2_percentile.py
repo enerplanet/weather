@@ -26,6 +26,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 #: Canonical variables a MERRA-2 percentile file is expected to carry
 #: (see CLAUDE.md's "## cross-provider" naming-unification writeup),
 #: plus the percentile-specific `source_year` field. Unlike COSMO-REA6,
@@ -41,7 +43,6 @@ _EXPECTED_VARS = (
 
 
 def _check_one(path: Path) -> None:
-    import numpy as np
     import xarray as xr
 
     with xr.open_dataset(path) as ds:

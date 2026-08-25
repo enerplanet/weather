@@ -56,7 +56,11 @@ pipeline = [
     "xarray>=2024.1",
     "netcdf4>=1.6",
 ]
-merge = ["h5py>=3.11"]
+# NetCDFMerger (weather.common.merge, `weather fetch --concatenate`) --
+# rewritten from h5py to xr.open_mfdataset/to_netcdf this session (see
+# CHANGELOG v1.9.0); needs the same stack as `pointquery` plus dask for
+# chunked concatenation, not h5py at all anymore.
+merge = ["xarray>=2024.1", "dask>=2024.1", "netcdf4>=1.6"]
 solar = ["pvlib>=0.10"]
 parquet = ["pyarrow>=15.0"]
 era5 = ["cdsapi>=0.7"]

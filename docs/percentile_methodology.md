@@ -3,9 +3,12 @@
 ## 1. Overview
 
 For each of the 824 × 848 spatial cells, this algorithm identifies
-which calendar year from the 1995–2018 COSMO-REA6 archive best
-represents the 10th-percentile (P10), median (P50), and
-90th-percentile (P90) of the long-term solar radiation climate.
+which calendar year from the COSMO-REA6 archive best represents the
+10th-percentile (P10), median (P50), and 90th-percentile (P90) of the
+long-term solar radiation climate. The algorithm works over whatever
+years are actually present — the real production run used the full
+1995–2019 archive (298 monthly files, not a clean 24-year boundary;
+DWD's real coverage stops partway through 2019).
 
 The ranking metric is GHI (Global Horizontal Irradiance), the primary
 solar energy resource variable.  Once the representative year is
@@ -30,8 +33,8 @@ by cumulative monthly global radiation.
 
 | Input | Shape | Description |
 | --- | --- | --- |
-| Monthly NetCDF files | 12 per year × 24 years = 288 | `COSMO_REA6_YYYY_MM_all_attrs.nc` |
-| Analysis period | 1995–2018 | 24 years |
+| Monthly NetCDF files | real production run: 298 | `COSMO_REA6_YYYY_MM_all_attrs.nc` |
+| Analysis period | 1995–2019 | ~24.8 years (real archive; see note above) |
 | Spatial grid | 824 × 848 | COSMO-REA6 rotated-pole |
 | Ranking metric | daily GHI sum | Summed per calendar day, per cell |
 
@@ -42,27 +45,54 @@ Leap-year days (29 Feb) are removed before any calculation.
 For each cell `(i, j)` and each month `m`:
 
 ```text
-1. Compute daily total GHI for every day in month m, for all 24 years.
+1. Compute daily total GHI for every day in month m, for all N years.
 
-2. Pool all years together into one long daily series (length ~ 24*31).
-   Sort this series and extract the threshold values:
-       val_P10[i,j] = value at the 10th percentile of the pooled series
-       val_P50[i,j] = value at the 50th percentile (median)
-       val_P90[i,j] = value at the 90th percentile
+2. Sum each year's daily totals into one cumulative monthly
+   radiation figure:
+       total[y,i,j] = sum of year y's daily GHI totals for month m
 
-3. For each individual year y, compute its empirical CDF fraction:
-       cdf_P10[y,i,j] = fraction of year y's days with GHI ≤ val_P10
-       cdf_P50[y,i,j] = fraction of year y's days with GHI ≤ val_P50
-       cdf_P90[y,i,j] = fraction of year y's days with GHI ≤ val_P90
+3. Take the target radiation level for each percentile ACROSS years:
+       tgt_P10[i,j] = 10th percentile of total[:,i,j]
+       tgt_P50[i,j] = 50th percentile (median)
+       tgt_P90[i,j] = 90th percentile
 
-4. Select the year that minimises the absolute KS distance to the target:
-       best_P10[i,j] = year  with  min |cdf_P10[y,i,j] - 0.10|
-       best_P50[i,j] = year  with  min |cdf_P50[y,i,j] - 0.50|
-       best_P90[i,j] = year  with  min |cdf_P90[y,i,j] - 0.90|
+4. Select the year sitting nearest each target level:
+       best_P10[i,j] = year  with  min |total[y,i,j] - tgt_P10[i,j]|
+       best_P50[i,j] = year  with  min |total[y,i,j] - tgt_P50[i,j]|
+       best_P90[i,j] = year  with  min |total[y,i,j] - tgt_P90[i,j]|
 ```
 
-This is the Finkelstein-Schafer (FS) statistic applied at the
-target percentile level.
+This ranks candidate years by cumulative monthly global radiation, as
+in ASHRAE TMY3 (see section 2).  Because `total` is a real-valued sum
+rather than a day count, the selection is effectively tie-free and the
+chosen year's brightness rank comes out at approximately the requested
+percentile.
+
+### 3.2.1 Superseded selection rule (fixed 2026-08-19)
+
+Until 2026-08-19 steps 2-4 instead pooled every year's daily values
+together, took the pooled P10/P50/P90 as **thresholds**, and picked the
+year minimising `|fraction of that year's days below the threshold - q|`.
+
+That rule cannot produce the levels section 3.3 promises.  A *typical*
+year has ~10% of its days below the pooled P10 — that is what the 10th
+percentile means — so `min |cdf_P10 - 0.10|` selected the typical year
+and actively rejected genuinely cloudy ones; `min |cdf_P90 - 0.90|`
+rejected sunny ones the same way.  All three levels therefore chased
+the same target.  Measured against the real 76-year ERA5-Land archive,
+the selected years' brightness ranks were 0.273 / 0.240 / 0.268 for
+P10 / P50 / P90 instead of 0.10 / 0.50 / 0.90 — P90 was returning
+years *cloudier* than the median.
+
+The statistic was also a day count divided by `max_days`, so it could
+only take `max_days + 1` distinct values.  With 31-day months and 76
+candidate years every cell had ties (median 12-20 years, mean ~42), and
+`np.argmin` awarded each tie to whichever year sorted first — handing
+the earliest year in the archive 52-59% of all cells at every level.
+
+All three providers shared the defect; all three were fixed together,
+so any percentile output generated before 2026-08-19 should be
+regenerated.
 
 ### 3.3 Physical Interpretation
 
@@ -123,8 +153,15 @@ truncated to match.
 - **Re-runs:** Existing valid output files are skipped automatically.
   Run with `--clean` to remove all output and force a full re-run.
 - **Sample size:** N = 24 years gives moderate percentile uncertainty,
-  particularly at P10/P90.  The FS method is robust to small N but
-  the tails should be interpreted with caution.
+  particularly at P10/P90, where the target level is interpolated from
+  only two or three bracketing years.  Interpret the tails with
+  caution; ERA5-Land's 76-year archive is correspondingly tighter.
+- **Time axis:** monthly source files are not guaranteed to share one
+  time axis — ERA5-Land's 1950-01 has no 00:00 stamp and so carries 743
+  hours starting at 01:00.  The mosaic is sized from the longest axis
+  across the winning years and each year is written at its own hour
+  offset, so a short year lands in the right slots instead of shifting
+  an hour early.
 - **GHI-only ranking:** Cells with uniformly low GHI (heavily clouded)
   may show inconsistent temperature or wind rankings relative to the
   selected P-level.  Multi-variable ranking is a planned extension.

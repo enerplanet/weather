@@ -16,16 +16,33 @@ channels:
 dependencies:
   - aria2                    # parallel multi-connection downloader.
   - bottleneck>=1.3.*        # fast NaN-aware ops (xarray ffill/rolling); optional but recommended
-  - cdo>=2.2.*               # NetCDF bbox cropping (weather.geo.crop / `weather geo crop`)
+  - cdo>=2.2.*               # NetCDF bbox cropping (weather.geo.crop / `weather geo crop`).
+  # NO win-64 conda-forge build (verified directly against conda-forge's
+  # win-64 repodata) -- silently absent on Windows dev envs, not a
+  # misconfiguration to "fix" there. test_geo_countries.py's cdo-dependent
+  # test skips gracefully (@pytest.mark.skipif); resolves fine on Linux
+  # (CI, sd26) via this same file. Kept here rather than split into a
+  # separate Linux-only env file -- see the identical lbzip2 note below
+  # and CLAUDE.md's "Windows-only advisory gaps" note for the reasoning.
   - cdsapi>=0.7.*
   - cfgrib>=0.9.*
   - dask>=2024.*
   - eccodes>=2.34.*
   - ecmwf-datastores-client>=0.5.*
   - flask>=3.0               # `weather serve` point-query HTTP API (weather.api / `api` extra)
-  - h5py>=3.11.*             # direct HDF5 chunk copy for NetCDFMerger (weather.common.merge)
   - jupyter # optional
-  - lbzip2                   # parallel bzip2 C binary; faster than Python bz2 per file;
+  - lbzip2                   # parallel bzip2 C binary; faster than Python bz2 per file
+  # (decompress.py falls back to Python's stdlib bz2 when absent, just
+  # slower). NO win-64 conda-forge build (verified directly against
+  # conda-forge's win-64 repodata) -- silently absent on Windows dev envs,
+  # reported as an ADVISORY (not critical) issue by `weather validate`,
+  # not a misconfiguration to "fix" there. Resolves fine on Linux (CI,
+  # sd26) via this same file; the Dockerfile installs it independently via
+  # apt-get regardless (Linux container either way). Kept in this shared
+  # file rather than split into a separate Linux-only env file -- see the
+  # identical cdo note above and CLAUDE.md's "Windows-only advisory gaps"
+  # note for the reasoning (this is the second, not first, instance of the
+  # same pattern; don't invent a third way to handle it).
   # libblas pinned to the openblas build, not conda-forge's default mkl build. Originally
   # needed because mkl + cupy's bundled CUDA BLAS DLLs (cublas/nvblas) collided on Windows,
   # crashing numpy>=2's blas_fpe_check() self-test on import (Windows fatal exception

@@ -44,6 +44,7 @@ import logging
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +148,7 @@ def _dirint_dni(
     np.ndarray
         DNI in W/m2, clipped to [0, inf).
     """
-    import pandas as pd
-    import pvlib  # optional heavy dependency
+    import pvlib  # optional extra (`solar`); see audit_imports
 
     idx = pd.DatetimeIndex(times)
     ghi_s = pd.Series(np.asarray(ghi, dtype=float), index=idx)

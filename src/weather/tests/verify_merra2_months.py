@@ -37,6 +37,9 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from weather.providers.merra2.config import get_config
 
 _PATTERN = re.compile(r"MERRA2_(\d{4})_(\d{2})_all_attrs\.nc$")
@@ -127,8 +130,6 @@ def main() -> None:  # noqa: C901 - straight-line verification report
     if not out_dir.is_dir():
         sys.exit(f"not a directory: {out_dir}")
 
-    import numpy as np
-    import pandas as pd
     import xarray as xr
 
     files = _find_files(out_dir)

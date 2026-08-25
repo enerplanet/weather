@@ -28,6 +28,23 @@ The non-abstract :meth:`is_complete` and :meth:`get` provide the
 shared skip-if-already-downloaded logic that is identical for every
 provider.
 
+:meth:`content_key` is a fourth, *non-abstract* hook (default ``None``)
+that subclasses can override when :meth:`local_path` alone doesn't
+uniquely identify what's actually in the file — e.g. ERA5-Land/MERRA-2,
+where the same ``(year, month[, day])`` can be requested with a
+different server-side area crop (``ERA5_AREA``/``MERRA2_AREA``), so two
+different areas' downloads collide on the same filename. When
+overridden, :meth:`is_complete`/:meth:`get` maintain a small sidecar
+file recording the content key actually used, and treat an existing
+file as complete only if no sidecar is present (trust local, exactly as
+before) or the sidecar matches the currently requested key (a mismatch
+forces a real re-fetch instead of silently reusing stale data from a
+different area). COSMO-REA6 never overrides this — DWD always serves
+the whole fixed domain regardless of any crop request, so its
+downloaded file is correct content for every possible request; leaving
+:meth:`content_key` at its default ``None`` is a hard no-op, verified
+in ``tests/test_base_downloader.py``.
+
 ``DownloadJob`` is a lightweight frozen dataclass that bundles the
 three coordinates that identify a single downloadable file for
 attribute-per-month providers (COSMO-REA6).  Providers with a
@@ -143,6 +160,33 @@ class BaseDownloader(ABC):
         """
 
     # ------------------------------------------------------------------
+    # Optional interface — override only when local_path() alone can't
+    # disambiguate what's actually in the file (see content_key's own
+    # docstring, and the module docstring above)
+    # ------------------------------------------------------------------
+
+    def content_key(self, job: DownloadJob) -> str | None:
+        """Return a string identifying *what request produced this
+        file's content*, or ``None`` (the default) if that's always
+        implied by :meth:`local_path` alone.
+
+        Parameters
+        ----------
+        job : DownloadJob
+            Download coordinates.
+
+        Returns
+        -------
+        str or None
+            ``None`` (default): :meth:`is_complete`/:meth:`get` behave
+            exactly as if this method didn't exist -- no sidecar file is
+            read or written. Any other value: enables the sidecar
+            content-key check in :meth:`is_complete` and the sidecar
+            write in :meth:`get`.
+        """
+        return None
+
+    # ------------------------------------------------------------------
     # Concrete shared logic — not normally overridden
     # ------------------------------------------------------------------
 
@@ -157,6 +201,15 @@ class BaseDownloader(ABC):
            :meth:`remote_size` — or the remote size is ``None``
            (cannot be checked), in which case existence alone is
            treated as sufficient.
+        4. If :meth:`content_key` returns non-``None``: either no
+           sidecar file exists yet (trust the local file, same as
+           before this check existed -- e.g. every already-completed
+           archive predating this feature), or the sidecar's recorded
+           key matches :meth:`content_key` for *this* job. A mismatch
+           means the existing file was downloaded for a different
+           request (e.g. a different area/bbox) and is NOT complete
+           for the current one -- forces a real re-fetch instead of
+           silently reusing the wrong content.
 
         Parameters
         ----------
@@ -169,9 +222,15 @@ class BaseDownloader(ABC):
         if path.stat().st_size == 0:
             return False
         expected = self.remote_size(job)
-        if expected is None:
-            return True   # remote can't report size; trust local
-        return path.stat().st_size == expected
+        if expected is not None and path.stat().st_size != expected:
+            return False
+
+        key = self.content_key(job)
+        if key is not None:
+            sidecar = _content_key_path(path)
+            if sidecar.exists() and sidecar.read_text().strip() != key:
+                return False
+        return True
 
     def get(self, job: DownloadJob) -> Path:
         """Return the local file, downloading only if necessary.
@@ -180,7 +239,11 @@ class BaseDownloader(ABC):
 
         1. If :meth:`is_complete` is ``True``, return
            :meth:`local_path` immediately (no network I/O).
-        2. Otherwise delegate to :meth:`_fetch` and return its result.
+        2. Otherwise delegate to :meth:`_fetch`, then (if
+           :meth:`content_key` returns non-``None``) atomically write a
+           sidecar file recording the key used, so a future request for
+           a *different* key against the same :meth:`local_path` is
+           correctly detected as incomplete rather than silently reused.
 
         Parameters
         ----------
@@ -194,4 +257,16 @@ class BaseDownloader(ABC):
         """
         if self.is_complete(job):
             return self.local_path(job)
-        return self._fetch(job)
+        result = self._fetch(job)
+        key = self.content_key(job)
+        if key is not None:
+            sidecar = _content_key_path(result)
+            tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+            tmp.write_text(key)
+            tmp.replace(sidecar)
+        return result
+
+
+def _content_key_path(local_path: Path) -> Path:
+    """Sidecar path for *local_path*'s content key: ``<name>.area``."""
+    return local_path.with_name(local_path.name + ".area")

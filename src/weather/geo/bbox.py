@@ -47,3 +47,31 @@ class BBox(NamedTuple):
         S, E]`` convention. Used by :func:`weather.geo.crop.crop_netcdf`.
         """
         return (self.west, self.east, self.south, self.north)
+
+    @classmethod
+    def parse(cls, raw: str) -> BBox:
+        """Parse a ``"N,W,S,E"`` string into a :class:`BBox`.
+
+        Same format/order as the ``ERA5_AREA``/``MERRA2_AREA`` env vars
+        (see ``EnvSettings.era5_area``/``merra2_area`` and
+        ``providers.era5_land.config._area_from_env``) — this is the one
+        place that parsing logic lives; those three call sites duplicated
+        it independently before this method existed.
+
+        Raises
+        ------
+        ValueError
+            If *raw* is not exactly 4 comma-separated numeric values.
+        """
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if len(parts) != 4:
+            raise ValueError(
+                f"bbox must be 'N,W,S,E' (4 numbers), got: {raw!r}"
+            )
+        try:
+            north, west, south, east = (float(p) for p in parts)
+        except ValueError as exc:
+            raise ValueError(
+                f"bbox values must be numeric, got: {raw!r}"
+            ) from exc
+        return cls(north=north, west=west, south=south, east=east)

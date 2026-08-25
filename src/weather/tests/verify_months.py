@@ -37,6 +37,9 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from weather.providers.era5_land.config import get_config
 
 _PATTERN = re.compile(r"ERA5_LAND_(\d{4})_(\d{2})_all_attrs\.nc$")
@@ -70,8 +73,6 @@ def main() -> None:
     if not out_dir.is_dir():
         sys.exit(f"not a directory: {out_dir}")
 
-    import numpy as np
-    import pandas as pd
     import xarray as xr
 
     files = []

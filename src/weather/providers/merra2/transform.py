@@ -58,6 +58,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from ...common.cf_conventions import attach_cf_latlon_attrs
 from ...common.derived_attributes import apply_derived_fields, bolton_rh, wind_speed
 from ...common.solar_position import spencer_zenith
 

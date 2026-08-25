@@ -55,6 +55,18 @@ def _area_from_env() -> list[float]:
         ) from exc
 
 
+def _region_tag_from_env() -> str | None:
+    """``ERA5_REGION_TAG``, if set -- internal plumbing set by
+    ``unified_cli.py`` alongside ``ERA5_AREA`` for a ``weather fetch
+    --country``/``--bbox`` run, not a user-facing knob (not in
+    ``.env.example``). ``None`` for every other caller, including the
+    documented ``export ERA5_AREA=...`` bulk-run workflow -- see
+    ``downloader.py``'s ``local_path``/``content_key``.
+    """
+    raw = os.getenv("ERA5_REGION_TAG", "").strip()
+    return raw or None
+
+
 def get_config() -> dict[str, Any]:
     """Return the fully-resolved ERA5-Land configuration."""
     return {
@@ -83,6 +95,9 @@ def get_config() -> dict[str, Any]:
 
         # Geographic crop [N, W, S, E]; required, see _area_from_env.
         "area": _area_from_env(),
+        # Region tag for the downloaded raw file's name (e.g. "NL"),
+        # None for the default/untagged case -- see local_path().
+        "region_tag": _region_tag_from_env(),
 
         # CDS runs ~ONE job per account at a time; more just queues.
         "cds_max_concurrent": int(

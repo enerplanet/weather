@@ -7,14 +7,30 @@ and don't need their own geo-cropping logic.
 
 Scope
 -----
-Works today for ERA5-Land and MERRA-2 output NetCDFs: both carry a
-regular, CF-compliant lat/lon grid. COSMO-REA6's current production
-export carries **no** lat/lon coordinates at all (only rotated-pole
-``rlat``/``rlon`` dims — see ``providers/cosmo_rea6/transform.py`` and
-``export.py``), so there is nothing for CDO to crop against yet; that
-needs a separate COSMO export change (tracked in ``.claude/open.md``),
-not attempted here. :func:`crop_netcdf` does not special-case this — it
-lets CDO's own error surface.
+Works for all three providers' current exports (COSMO-REA6, ERA5-Land,
+MERRA-2), each of which carries real ``latitude``/``longitude``
+coordinates with the CF ``standard_name``/``units`` attributes CDO
+requires to recognise them (COSMO: 2-D auxiliary coordinates on its
+native rotated-pole grid, classified by CDO as ``curvilinear``;
+ERA5-Land/MERRA-2: 1-D coordinates, classified as ``lonlat``) — see
+``common/cf_conventions.attach_cf_latlon_attrs``, called from each
+provider's ``transform.py``.
+
+This was a real, confirmed gap until fixed: without those two
+attributes (present until then only as bare ``_FillValue``-only
+variables — an artefact of each provider's ``assign_coords`` call
+building a fresh coordinate with no attributes), CDO logs
+``Coordinates variable latitude can't be assigned!``, falls back to
+``gridtype = generic`` with no lon/lat semantics at all, and
+``sellonlatbox`` aborts outright (``Unsupported grid type: generic`` /
+``No processable variable found!``) — verified against real exported
+files for all three providers (via a real ``cdo sellonlatbox`` run,
+not assumed). Archives exported before this fix landed do not have it
+retroactively -- new exports get it automatically, but an existing
+file will still hit the same abort until either re-exported or patched
+in place (a cheap, metadata-only netCDF4 attribute fix -- no data
+columns need touching or recomputing; not yet applied to any real
+archive at the time of writing, only verified against small copies).
 
 Not wired into any provider's ``pipeline.py``. This is a standalone
 post-processing step, run against an already-exported output file (see

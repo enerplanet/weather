@@ -41,6 +41,66 @@ def _load_countries() -> dict[str, BBox]:
 COUNTRIES: dict[str, BBox] = _load_countries()
 
 
+# ISO 3166-1 alpha-2 codes, used as the region tag in fixture/output
+# filenames for a country-scoped ``weather fetch`` (e.g.
+# ``MERRA2_NL_2023_01_all_attrs.nc``). Real ISO codes, not invented
+# shorthand -- immediately recognisable, no bikeshedding. One deliberate
+# note: the UK's real ISO code is "GB" (Great Britain), not "UK" --
+# used here despite "UK" being the more colloquial spelling, matching
+# ISO 3166-1 rather than common usage. Both `uk`/`united_kingdom` keys
+# map to the same "GB" code, consistent with COUNTRIES treating them as
+# two independent entries for the same country.
+COUNTRY_CODES: dict[str, str] = {
+    "austria": "AT",
+    "belgium": "BE",
+    "bulgaria": "BG",
+    "croatia": "HR",
+    "czech_republic": "CZ",
+    "czechia": "CZ",
+    "denmark": "DK",
+    "estonia": "EE",
+    "finland": "FI",
+    "france": "FR",
+    "germany": "DE",
+    "greece": "GR",
+    "hungary": "HU",
+    "ireland": "IE",
+    "italy": "IT",
+    "latvia": "LV",
+    "lithuania": "LT",
+    "luxembourg": "LU",
+    "netherlands": "NL",
+    "norway": "NO",
+    "poland": "PL",
+    "portugal": "PT",
+    "romania": "RO",
+    "slovakia": "SK",
+    "slovenia": "SI",
+    "spain": "ES",
+    "sweden": "SE",
+    "switzerland": "CH",
+    "uk": "GB",
+    "united_kingdom": "GB",
+}
+
+
+def get_country_code(country: str) -> str:
+    """Return the ISO 3166-1 alpha-2 code for *country* (see
+    :data:`COUNTRY_CODES`).
+
+    Raises
+    ------
+    ValueError
+        If *country* is not a recognised key (same message/listing as
+        :func:`get_bbox`).
+    """
+    key = normalize_country(country)
+    if key not in COUNTRY_CODES:
+        available = ", ".join(list_countries())
+        raise ValueError(f"Unknown country: '{country}'. Available: {available}")
+    return COUNTRY_CODES[key]
+
+
 def normalize_country(country: str) -> str:
     """Normalize user-provided country strings to internal keys.
 

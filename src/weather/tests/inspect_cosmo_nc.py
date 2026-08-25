@@ -26,6 +26,9 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 #: Canonical variables COSMO-REA6's transform.py is expected to produce
 #: (see CLAUDE.md's "## cross-provider" naming-unification writeup).
 _EXPECTED_VARS = (
@@ -61,8 +64,6 @@ def main() -> None:
     if not path.exists():
         sys.exit(f"not found: {path}")
 
-    import numpy as np
-    import pandas as pd
     import xarray as xr
 
     ds = xr.open_dataset(path)

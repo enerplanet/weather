@@ -264,10 +264,31 @@ class Merra2Downloader(BaseDownloader):
     def local_path(  # type: ignore[override]
         self, job: Merra2DownloadJob,
     ) -> Path:
-        """Return the local destination path for *job*."""
+        """Return the local destination path for *job*.
+
+        ``MERRA2_<collection>_<TAG>_<YYYYMMDD>.nc4`` when
+        ``cfg["region_tag"]`` is set, else the untagged
+        ``MERRA2_<collection>_<YYYYMMDD>.nc4`` (byte-identical to
+        before this tag existed). See :meth:`content_key`'s docstring
+        for why this alone isn't sufficient protection.
+        """
         date_str = f"{job.year}{job.month:02d}{job.day:02d}"
         download_dir = Path(self._cfg["download_dir"])
-        return download_dir / f"MERRA2_{job.collection}_{date_str}.nc4"
+        tag = self._cfg.get("region_tag")
+        tag_part = f"{tag}_" if tag else ""
+        return download_dir / f"MERRA2_{job.collection}_{tag_part}{date_str}.nc4"
+
+    def content_key(  # type: ignore[override]
+        self, job: Merra2DownloadJob,
+    ) -> str | None:
+        """The configured area, as a stable string. MERRA-2's ``area``
+        always has at least the Europe default (never falsy), unlike
+        ERA5-Land's global-by-default. Two different areas for the same
+        collection/day must never be treated as the same downloaded
+        content, even if they'd otherwise share a :meth:`local_path`
+        (e.g. two different callers that both leave ``region_tag``
+        unset)."""
+        return ",".join(str(v) for v in self._cfg["area"])
 
     def remote_size(  # type: ignore[override]
         self, job: Merra2DownloadJob,

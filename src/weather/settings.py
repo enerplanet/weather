@@ -437,6 +437,21 @@ class EnvSettings:
             ) from exc
 
     @staticmethod
+    def merra2_region_tag() -> str | None:
+        """Region tag for the current fetch (MERRA2_REGION_TAG), if set.
+
+        Internal plumbing set by ``unified_cli.py`` alongside
+        ``MERRA2_AREA`` for a ``weather fetch --country``/``--bbox``
+        run -- not a user-facing knob (not in ``.env.example``). ``None``
+        when unset, which is the default for every other caller
+        (including the documented ``export MERRA2_AREA=...`` bulk-run
+        workflow) -- see ``downloader.py``'s ``local_path``/
+        ``content_key`` for how this is used.
+        """
+        raw = os.getenv("MERRA2_REGION_TAG", "").strip()
+        return raw or None
+
+    @staticmethod
     def merra2_opendap_max_concurrent() -> int:
         """Parallel OPeNDAP requests (MERRA2_OPENDAP_MAX_CONCURRENT).
 

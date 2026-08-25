@@ -104,6 +104,308 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wind query and a solar query for the same location/year no longer
   collide in the cache.
 
+### Fixed
+
+- COSMO-REA6 stamps hours as **ending**: a January file runs `01:00` on
+  the 1st through `00:00` on Feb 1 — exactly 744 stamps, one whole
+  month. Because that final stamp bears the *next* month's date,
+  resampling by calendar day opened a spurious one-hour 32nd bin (30
+  for a leap February, the extra one all-NaN), which both distorted the
+  year's monthly GHI total and left years with differing bin counts not
+  comparable. Daily sums are now clipped to the file's own calendar
+  month. Verified empirically across all three providers: the clip
+  yields the correct 31/28/28/31 day counts everywhere, where the old
+  leap-only filter gave COSMO 32/30/29/32. Confirmed a no-op for
+  ERA5-Land and MERRA-2 — 0 of 912 and 0 of 552 files carry an
+  out-of-month stamp — so their output was not regenerated.
+  Known consequence: the clip drops COSMO's final stamp, leaving a
+  monthly total 1 hour short of 744. It is uniform across every year,
+  so it cannot bias a between-year ranking, but it is a real ~0.13%
+  truncation and is not corrected.
+- Mosaic time offsets are anchored to the earliest start among the
+  winning years instead of to midnight. Every COSMO year starts at
+  hour 1 (hour-ending stamps), so midnight-anchoring sized the mosaic
+  one slot longer than any source file holds, while the output time
+  coordinate is copied from a real file — every month then died with
+  `ValueError: conflicting sizes for dimension 'time'`. ERA5-Land
+  escaped this only because most of its years do start at midnight, so
+  a valid reference year existed; its lone short month (1950-01, which
+  has no 00:00 stamp upstream) is still placed at its true offset.
+- A cell was invalidated when **any** year lacked data there. Once
+  COSMO's leap Februaries contributed an all-NaN day, that flagged all
+  698,752 cells and the mosaic skipped months 02, 05 and 12 outright
+  ("skipped (no spatial maps)"). A cell is now flagged only when *no*
+  year can speak for it, and years without data at a cell are excluded
+  from that cell's ranking instead of disqualifying the cell.
+
+- **Percentile representative-year selection did not produce the
+  documented P-levels, in all three providers.** The selection minimised
+  `|fraction of a year's days at or below the pooled P-threshold - q|`.
+  A *typical* year has ~10% of its days below the pooled P10 by
+  definition, so that rule picked the typical year at every level and
+  actively rejected genuinely cloudy (P10) and sunny (P90) ones.
+  Measured against the real 76-year ERA5-Land archive, the selected
+  years' brightness ranks were 0.273 / 0.240 / 0.268 for P10 / P50 /
+  P90 instead of 0.10 / 0.50 / 0.90 — **P90 was returning years
+  cloudier than the median**. Replaced with a ranking on cumulative
+  monthly GHI, which is what `docs/percentile_methodology.md` section 2
+  (ASHRAE TMY3) already specified. All percentile output generated
+  before this release should be regenerated.
+- Same statistic was also quantised: being a day count over `max_days`
+  it could take only `max_days + 1` values, so with 31-day months and
+  76 candidate years **every** cell had ties (median 12-20 years, mean
+  ~42), and `np.argmin` awarded each tie to whichever year sorted
+  first — handing the earliest archive year 52-59% of all cells at
+  every level. The replacement metric is a real-valued sum, so ties
+  effectively vanish. The now-obsolete Numba kernel (which implemented
+  the same wrong statistic behind `WEATHER_USE_NUMBA_KS`) was removed
+  rather than left as a landmine; the new metric needs no per-cell
+  sorting and is pure vectorised numpy.
+- Percentile mosaic assembly crashed on January for any archive whose
+  months do not share one time axis. ERA5-Land's 1950-01 has no 00:00
+  stamp upstream (743 hours from 01:00, vs 744 for every other
+  January); the mosaic was sized from the earliest *winning* year, so
+  once 1950 won a cell the array was an hour short and the next year
+  raised `ValueError: shape mismatch: value array of shape (744,N)
+  could not be broadcast to indexing result of shape (743,N)`. The
+  mosaic is now sized from the longest axis across winning years and
+  each year is written at its own hour offset.
+- New `providers/era5_land/spike_repair.py`: repairs physically
+  impossible flux spikes at interior stamps. For a very small number of
+  individual cells the transform lost one accumulation step and stored
+  the previous day's whole accumulated total in its place, yielding an
+  hourly "flux" of thousands of W/m^2 (peak 7624 W/m^2 — 5.6x the solar
+  constant), plus a companion error at the following stamp. Incidence
+  on the real 1950-2025 archive: 11 values across 912 monthly files.
+  The true values are not derivable from the NetCDF but are still in
+  the cached raw GRIB, so they are recomputed exactly rather than
+  interpolated. `boundary_repair.py` now also detects such values and
+  logs an actionable error, since it only ever touches stamp 0.
+
+### Changed
+
+- `tests/audit_imports.py` now enforces hard convention #1 rather than
+  only the narrower NameError case, and three real bugs in the auditor
+  itself were fixed: with no arguments it audited nothing and still
+  exited 0; `all(...)` over a generator short-circuited the sweep at the
+  first failing file (so most of the tree was never reached — 109 files
+  are now scanned, previously as few as 17); and function parameters
+  were not counted as bindings, which reported `def f(..., xr)` as
+  out-of-scope usage. It now also flags a hard dependency imported
+  inside a function, exempting optional extras (`pvlib`, `xarray`,
+  `dask`, ...) for which a function-local import is what keeps a light
+  install importable.
+- Hoisted the function-local hard-dependency imports the corrected audit
+  found, across `providers/era5_land/boundary_repair.py`,
+  `common/derived_attributes.py`, `providers/base_percentile.py`,
+  `providers/cosmo_rea6/{export,transform}.py` and five `tests/` tools.
+  `common/merge.py`'s local `xarray` import is deliberate and was left
+  alone — `xarray` is an extra, not a base dependency.
+
+## [1.9.3] - 2026-08-15
+
+### Fixed
+
+- Real, confirmed silent-wrong-data bug in `weather fetch --country`/
+  `--bbox` for era5-land/merra-2: the raw download-phase filename
+  carried no area/region identifier at all, while its content was
+  server-side cropped to whatever area was requested. Combined with
+  both providers' completeness check being existence-only (neither's
+  remote source can report a size before processing), a second
+  country-scoped fetch for the same year/month against the same
+  `work_dir` silently reused the first country's cached raw download
+  — e.g. a `germany` fetch after a `netherlands` fetch produced an
+  output file labeled Germany but actually populated with Netherlands
+  data, with no error, warning, or overwrite. Fixed via two mechanisms:
+  region-tagged download filenames (`downloader.py::local_path()` in
+  both providers, matching the existing output-file tagging
+  convention) and a new `content_key()`/sidecar hook in
+  `base_downloader.py` as a defense-in-depth backstop for callers that
+  bypass `weather fetch` (e.g. the documented `export ERA5_AREA=...`
+  bulk-run workflow) — a missing sidecar is always trusted, making the
+  fix zero-migration-risk for every already-completed real archive.
+  COSMO-REA6 unaffected by design (DWD always serves the whole domain
+  regardless of any crop request). Full writeup:
+  `docs/WEATHER_FETCH_GUIDE.md`'s "Region-scoped download caching"
+  section.
+- Related gap found by the same investigation: every custom `--bbox`
+  crop got the literal same `"CUSTOM"` tag, so two different custom
+  bboxes for the same year/month collided on the same tagged filename
+  too. Now derives a short deterministic hash from the actual bbox
+  values (`CUSTOM-<hash>`).
+
+## [1.9.2] - 2026-08-14
+
+### Fixed
+
+- `weather geo crop` (`cdo sellonlatbox`) was silently broken against
+  every provider's real exported output, confirmed via real `cdo` runs
+  (not assumed): each provider's `transform.py` builds `latitude`/
+  `longitude` via `assign_coords()`, which creates a fresh coordinate
+  with no attributes, discarding CF `standard_name`/`units`. Without
+  them, CDO can't identify the coordinates, falls back to
+  `gridtype = generic`, and `sellonlatbox` aborts (`Unsupported grid
+  type: generic` / `No processable variable found!`). Fixed via a new
+  shared `common/cf_conventions.attach_cf_latlon_attrs()`, called from
+  all three providers' `transform.py` — new exports get it
+  automatically. Verified against real files both before (hard abort)
+  and after (correct cropped output) the fix, for COSMO's 2-D
+  curvilinear grid and MERRA-2's 1-D grid. Full investigation:
+  `docs/cdo_crop_cf_metadata.md`.
+- Retroactively patched the already-exported COSMO-REA6 (298 files) and
+  MERRA-2 (552 files) archives with the same fix — metadata-only (no
+  data recomputed), idempotent, verified with a real `cdo sellonlatbox`
+  run against an unmodified archive file for each provider afterward.
+  ERA5-Land's archive intentionally left untouched (its own bulk
+  pipeline run was active at the time); needs the same pass once that
+  run finishes.
+- `README.md`'s "Country cropping" section and `weather geo crop --input`'s
+  own `--help` text both still said COSMO-REA6 wasn't supported; corrected.
+- `docs/debugging.md`: removed an entirely obsolete `h5py`
+  troubleshooting entry (h5py was removed as a dependency in 1.9.0's
+  `NetCDFMerger` rewrite) and corrected a section that recommended the
+  *old* h5py-based `NetCDFMerger` as a workaround for an
+  `xr.open_mfdataset` GPFS/NFS bug — `NetCDFMerger` now uses
+  `xr.open_mfdataset` internally, so that workaround no longer applies
+  as written.
+- `docs/qa.md`'s disk-space guidance was significantly understated
+  (predated several sessions' worth of added output variables): real
+  measured monthly/annual output sizes (~9.3 GB/month, ~112 GB/year) are
+  roughly double and 25x the old ~4.5 GB estimates respectively, making
+  total archive storage ~5.4+ TB, not the previously-stated ~230 GB.
+  Also corrected the archive's real year range (1995–2019, 298 files,
+  not a clean 1995–2018/24-year boundary) here and in
+  `docs/percentile_methodology.md`.
+
+### Added
+
+- `docs/WEATHER_GEO_GUIDE.md` — full `weather geo {list,crop}` usage
+  guide (flags, provider support matrix, the `cdo` requirement and its
+  Windows limitation), cross-referenced from `docs/WEATHER_FETCH_GUIDE.md`
+  and `docs/README.md`'s index.
+
+## [1.9.1] - 2026-08-13
+
+### Added
+
+- `scripts/launch_weather_serve.sh` — standardized launcher for `weather
+  serve` (previously a local-only scaffold, now actually deployed):
+  reads `WEATHER_API_KEYS` from `.env` (never hardcoded in the
+  committed script itself), PID/log files under `logs/` (newly
+  gitignored) rather than `/tmp`, which isn't guaranteed to survive a
+  reboot/cleanup. `src/weather/api/README.md` rewritten with the real
+  deployment runbook (check/stop/restart, the firewall/tunnel caveat
+  for reaching a port behind a VPN-protected host, what's verified end
+  to end vs. not yet).
+
+### Changed
+
+- `weather validate`'s severity handling: the missing `pbzip2`/`lbzip2`
+  binary (no win-64 conda-forge build, same gap as `cdo`) was treated
+  with the same severity as a genuinely broken environment, failing the
+  CLI's exit code for something its own comment already called
+  "optional but recommended." New `providers.base.ADVISORY_PREFIX`
+  string-prefix convention — `weather validate` now reports this class
+  of issue as a non-fatal advisory instead, matching how `cdo`'s
+  identical gap already degrades gracefully elsewhere
+  (`test_geo_countries.py`'s `pytest.mark.skipif`). `weather_env.yml`
+  gained matching explanatory comments next to both `cdo` and `lbzip2`.
+- `pyproject.toml`'s `merge` extra now lists `xarray`/`dask`/`netcdf4`
+  (what `common/merge.py` actually imports since its v1.9.0 rewrite)
+  instead of `h5py`, which had become a fully dead dependency (verified
+  via a repo-wide import search) — removed from `weather_env.yml` too.
+
+### Fixed
+
+- `validate.py` (root-level local CI mirror script): `run_cmd()`'s
+  hardcoded 60s timeout was never actually enough for a cold `docker
+  build` (base image pull + full conda env solve/install) despite the
+  script's own comment promising "2-3 minutes" — now configurable per
+  call, with the Docker build step given 900s. Also fixed the "Docker
+  CLI" smoke-test call itself: `weather:test` is a deps-only image
+  (source is bind-mounted at `/app/src` at runtime, matching the
+  Dockerfile's own documented usage) and its entrypoint already runs
+  `python -m weather` internally — the old call was missing the
+  bind-mount (`No module named weather`) and duplicating `python -m
+  weather` on top of the entrypoint's own invocation.
+- `audit_imports.py` (the local-import-scope auditor) had two real
+  false-positive gaps, found by running it repo-wide for the first time
+  this session: it only recognized plain `import`/`from` statements as
+  binding a watched name in scope, missing two already-used, genuinely
+  valid patterns — `xr = pytest.importorskip("xarray")` and
+  `xr = _import_xarray()` (a lazy-import helper). Generalized the
+  scope-detection rule to any single-target assignment binding a
+  watched name. Now clean across the whole `src/weather/` tree.
+- `export.py`/`pipeline.py`: a couple of genuinely redundant local
+  imports (`time`, a duplicate `os`) hoisted to module level — not a
+  broader sweep, since most of `pipeline.py`'s other local imports are
+  deliberate lazy-loading to keep `weather info`/`weather validate`
+  from paying the heavy cfgrib/xarray/dask import cost.
+
+## [1.9.0] - 2026-08-12
+
+### Added
+
+- `weather fetch` — unified CLI subcommand (`src/weather/unified_cli.py`)
+  consolidating the scattered per-provider scripts into one command across
+  all three providers: date-range selection (`--range
+  {single-month,single-year,multi-year}`), `--concatenate
+  {none,per-year,all}` (via `NetCDFMerger`), `--percentile` (via each
+  provider's existing `*PercentileIndexer`), and `--country`/`--bbox` area
+  scoping with ISO-3166-1-code-tagged output filenames. Reuses existing
+  `run_pipeline()`/`NetCDFMerger`/percentile-indexer/`weather.geo`
+  machinery — no duplicated business logic. Verified end-to-end against
+  real MERRA-2 data. Documented in `README.md` and the new
+  `docs/WEATHER_FETCH_GUIDE.md` (every flag, provider-compatibility
+  matrix, resume/tagging caveats).
+- `--country`/`--bbox` support for `cosmo-rea6` (previously era5-land/
+  merra-2 only). New `providers/cosmo_rea6/crop.py`: since DWD has no
+  server-side area-subsetting endpoint, the crop happens locally right
+  after decompress and before the expensive derived-field transform step
+  — `compute_crop_index()` decodes a bbox into a `(y, x)` index window
+  from real cfgrib-decoded WGS84 lat/lon (computed once per fetch, reused
+  across every attribute/month), `crop_datasets()` applies it. Verified
+  against real data twice: an isolated sandbox smoke test (Netherlands
+  crop narrowing to ~0.4% of the domain) and a real local pipeline run
+  producing correct output across all 13 derived variables.
+- `geo/bbox.py`'s `BBox.parse()` classmethod (`"N,W,S,E"` string parsing,
+  previously duplicated independently at 3 call sites) and
+  `geo/countries.py`'s `COUNTRY_CODES`/`get_country_code()` (ISO 3166-1
+  alpha-2 codes for output-filename tagging).
+
+### Changed
+
+- `common/merge.py`'s `NetCDFMerger` rewritten from hand-rolled h5py to
+  `xr.open_mfdataset`/`to_netcdf`, after real end-to-end testing (opening
+  a merged file with the standard toolchain, not just running the merge)
+  surfaced two serious bugs in the old implementation: missing HDF5
+  dimension-scale relationships (unreadable by netCDF4/xarray) and
+  silently wrong/overlapping timestamps (each source file's CF time units
+  are relative to that file's own start; the old merge copied raw values
+  under only the first file's units). Verified against real COSMO-scale
+  data (dimension scales present, correct year-boundary timestamps,
+  `get_point_weather` round-trip).
+- `NetCDFMerger`'s chunking fixed for real performance: real on-disk
+  chunk inspection showed COSMO's chunks are 3-D, not time-only, so the
+  original time-only chunk spec left every spatial dimension unchunked.
+  The chunk spec is now derived from each dataset's own real dimension
+  sizes (generic across providers' different spatial dimension names, not
+  hardcoded). Full-scale, unsliced, real-data measurement (2 real COSMO
+  months): 51.4 min → 35.5 min (-31%), with dask's worker threads capped
+  at 16 (scoped locally, not a global override) after confirming higher
+  counts gave no further measured speedup.
+
+### Fixed
+
+- `point_query.py`'s COSMO annual-file lookup checked for
+  `COSMO_REA6_<year>.nc`, but the only thing that actually produces an
+  annual file (`NetCDFMerger`) produces
+  `COSMO_REA6_<year>_annual_all_attrs.nc` — two incompatible naming
+  conventions for "the annual COSMO file" coexisted; fixed to match
+  `NetCDFMerger`'s established convention.
+- `weather run`'s CLI dispatch silently dropped `--months`/`--ncores` for
+  `cosmo-rea6`/`merra-2` even though both accept them.
+
 ## [1.8.0] - 2026-08-06
 
 ### Fixed

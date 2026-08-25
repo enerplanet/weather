@@ -101,6 +101,10 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+import xarray as xr
+
 logger = logging.getLogger("boundary_repair")
 
 _PATTERN = re.compile(r"ERA5_LAND_(\d{4})_(\d{2})_all_attrs\.nc$")
@@ -108,6 +112,11 @@ _MONTH_TOKEN = re.compile(r"^(\d{4})-(\d{2})$")
 
 #: Accumulated variables whose first stamp needs the cross-month repair.
 _REPAIR_VARS = ("GHI", "sf")
+
+#: Physically impossible hourly mean irradiance, W/m^2. The solar
+#: constant is ~1361 W/m^2, so an interior stamp above this is
+#: corrupt rather than merely extreme -- see ``spike_repair``.
+_IMPLAUSIBLE_GHI_W_M2 = 1500.0
 
 #: Written into ``boundary_status`` once a file has been repaired.
 _DONE_FLAG = "BOUNDARY_REPAIRED"
@@ -176,8 +185,6 @@ def _prev_lastday_sum(prev_ds, var: str):
     Returns (array, n_stamps). ``array`` is None if the window is not
     exactly 23 stamps (i.e. the previous file is malformed).
     """
-    import numpy as np
-    import pandas as pd
 
     t = pd.DatetimeIndex(np.asarray(prev_ds["time"].values))
     last_day = t[-1].floor("D")
@@ -201,7 +208,6 @@ def _raw_first_stamp(cur, var: str):
     poison a later one); otherwise reads (and does not yet persist) the
     current value, which at this point is still the untouched raw value.
     """
-    import numpy as np
 
     backup = _backup_var(var)
     if backup in cur:
@@ -211,7 +217,6 @@ def _raw_first_stamp(cur, var: str):
 
 def _repair_first_stamp(cur, prev, var: str):
     """Return (new_first_2d, n_repaired) for *var*, or (None, 0)."""
-    import numpy as np
 
     if var not in cur or var not in prev:
         return None, 0
@@ -270,6 +275,43 @@ def _ensure_backup(ds, var: str) -> None:
     )
 
 
+def _warn_if_implausible(ds, tag: str) -> int:
+    """Log any physically impossible GHI left at an *interior* stamp.
+
+    This repair only ever touches stamp 0, so a corrupt interior stamp
+    would otherwise ship silently -- see
+    :mod:`~weather.providers.era5_land.spike_repair` for the mechanism
+    and the fix. Checking is essentially free here because the caller
+    has already loaded the whole file in order to rewrite it.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        The loaded monthly file, after its boundary repair.
+    tag : str
+        Human-readable file identifier for the log line.
+
+    Returns
+    -------
+    int
+        Number of impossible values found (0 when the file is clean).
+    """
+    if "GHI" not in ds:
+        return 0
+    interior = np.nan_to_num(ds["GHI"].values[1:], nan=0.0)
+    if interior.size == 0:
+        return 0
+    bad = int((interior > _IMPLAUSIBLE_GHI_W_M2).sum())
+    if bad:
+        logger.error(
+            "%s: %d interior GHI value(s) above %.0f W/m^2 (max %.0f) "
+            "— not a boundary defect; run spike_repair to correct them "
+            "from the cached raw GRIB.",
+            tag, bad, _IMPLAUSIBLE_GHI_W_M2, float(interior.max()),
+        )
+    return bad
+
+
 def _write(ds, path: Path) -> None:
     """Atomically write *ds* back to *path* with the standard encoding."""
     enc = {
@@ -320,8 +362,6 @@ def repair_boundaries(
     dict
         ``{"repaired": int, "skipped": int, "gaps": int, "errors": int}``.
     """
-    import numpy as np
-    import xarray as xr
 
     output_dir = Path(output_dir)
     all_files = _discover(output_dir, None, None)
@@ -444,6 +484,7 @@ def repair_boundaries(
                     f"{ppath.name} (previous last-day increment sum; "
                     "original value preserved in <var>_boundary_raw)"
                 )
+                errors += _warn_if_implausible(cur, f"{cy}-{cm:02d}")
                 _write(cur, cpath)
                 repaired += 1
         finally:

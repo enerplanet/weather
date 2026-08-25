@@ -62,11 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
             "  python -m weather geo crop --input ERA5_Land_2020_06.nc \\\n"
             "      --output ERA5_Land_2020_06_netherlands.nc "
             "--country netherlands\n"
+            "  python -m weather fetch --range single-month --year 2018 "
+            "--month 3\n"
             "\n"
             "Installed conda package only:\n"
             "  weather info\n"
             "  weather validate\n"
             "  weather run --provider cosmo-rea6 --months 1\n"
+            "  weather fetch --range single-month --year 2018 --month 3\n"
         ),
     )
     parser.add_argument(
@@ -190,7 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input",
         required=True,
         metavar="PATH",
-        help="Input NetCDF file (ERA5-Land / MERRA-2 output).",
+        help="Input NetCDF file (any provider's output).",
     )
     geo_crop_p.add_argument(
         "--output",
@@ -217,6 +220,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve_p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1).")
     serve_p.add_argument("--port", type=int, default=8080, help="Bind port (default: 8080).")
+
+    # ── fetch ───────────────────────────────────────────────────────────────
+    from .unified_cli import add_fetch_parser  # deferred — avoids circular import
+
+    add_fetch_parser(sub)
 
     return parser
 
@@ -254,6 +262,7 @@ def _cmd_info(args: argparse.Namespace) -> None:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
+    from .providers.base import ADVISORY_PREFIX
     from .registry import get_default_provider, get_provider
 
     provider = (
@@ -262,12 +271,26 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         else get_default_provider()
     )
     issues = provider.validate_environment()
-    if issues:
+    advisories = [
+        i[len(ADVISORY_PREFIX):] for i in issues
+        if i.startswith(ADVISORY_PREFIX)
+    ]
+    critical = [i for i in issues if not i.startswith(ADVISORY_PREFIX)]
+
+    if advisories:
+        print(
+            "Weather pipeline environment advisories "
+            "(degraded, not broken):"
+        )
+        for issue in advisories:
+            print(f"  [i] {issue}")
+    if critical:
         print("Weather pipeline environment issues found:")
-        for issue in issues:
+        for issue in critical:
             print(f"  [!] {issue}")
         return 1
-    print("Weather pipeline environment OK — all checks passed.")
+    suffix = " (see advisories above)." if advisories else "."
+    print("Weather pipeline environment OK — all checks passed" + suffix)
     return 0
 
 
@@ -301,6 +324,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         # COSMO-REA6 (and providers sharing its signature).
         kwargs = {
             "year": args.year,
+            "months": args.months,
+            "ncores": args.ncores,
             "work_dir": work_dir,
             "output_path": Path(args.output) if args.output else None,
             "include_wind_components": not args.no_wind_components,
@@ -380,6 +405,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_cmd_geo(args))
     elif args.command == "serve":
         _cmd_serve(args)
+    elif args.command == "fetch":
+        from .unified_cli import cmd_fetch
+
+        sys.exit(cmd_fetch(args))
     else:
         parser.print_help()
         sys.exit(1)

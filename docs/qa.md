@@ -255,22 +255,41 @@ for the full resume logic.
 
 ---
 
-## 9. How much disk space does a full 24-year run require?
+## 9. How much disk space does a full run require?
 
-The COSMO-REA6 dataset covers **1995–2018 (24 years)**.
+The COSMO-REA6 dataset covers **1995–2019** (real production archive: 298
+monthly files — DWD's actual coverage stops partway through 2019, not a
+clean 24-year boundary).
 
-| Stage | Per-year size | 24 years |
+**Updated 2026-08-14 with real measured numbers** (the previous version of
+this table significantly understated the monthly/annual figures — it
+predates several sessions' worth of added output variables, e.g.
+`ALBEDO`/`T_DEW`/`SNOW_DEPTH`/kept `U_10M`/`V_10M`, which meaningfully grew
+per-file size since the estimate was first written). Monthly and annual
+sizes below are directly measured from the real archive on `sd26`
+(average of 12 real 1995 monthly files; one full real 2018 annual merge).
+The bz2/decompressed-GRIB figures are carried over from the original
+estimate and have **not** been re-verified this session:
+
+| Stage | Per month / year | Full archive (298 months / ~24.8 years) |
 | --- | --- | --- |
-| Downloaded bz2 (12 months × 9 attrs) | ~12 GB | ~288 GB (deleted after Phase 2) |
-| Decompressed GRIB (12 months × 9 attrs) | ~84 GB | ~84 GB peak (deleted per month) |
-| Monthly NetCDF output | ~4.5 GB | ~108 GB |
-| Annual merged NetCDF | ~4.5 GB | ~108 GB (additive to monthly) |
-| Representative files (3 × P10/P50/P90) | ~4.5 GB | ~14 GB |
+| Downloaded bz2 (12 months × 9 attrs) | ~12 GB/year | ~288 GB (deleted after Phase 2; not re-verified) |
+| Decompressed GRIB (12 months × 9 attrs) | ~84 GB/year peak | ~84 GB peak (deleted per month; not re-verified) |
+| Monthly NetCDF output | ~9.3 GB/month | ~2.7 TB |
+| Annual merged NetCDF | ~112 GB/year | ~2.7 TB (additive to monthly) |
+| Representative files (3 × P10/P50/P90) | -- | ~14 GB (not re-verified) |
 
-Peak disk usage during processing: **~90 GB** (one year's GRIBs + one month's
-output at a time).  Final storage after all processing: **~230 GB** (monthly +
-annual + representative files).  Monthly files can be deleted after annual
-merge to recover ~108 GB.
+Final storage if every month **and** every year's annual merge are kept:
+**~5.4+ TB**, not the ~230 GB this section previously claimed — the old
+estimate's monthly/annual rows were roughly the size of a *single* month's
+output, not a whole year's. Monthly files can be deleted after their
+annual merge to recover the ~2.7 TB those files use, if only the annual
+files are needed going forward. Peak disk usage during a single year's
+processing (GRIBs + that year's monthly/annual output, before cleanup) is
+larger than the old ~90 GB estimate too, given the corrected per-year
+output size — budget accordingly rather than relying on that number
+directly; it was not recomputed with the same rigor as the monthly/annual
+figures above.
 
 ---
 
@@ -340,7 +359,7 @@ enabling highly parallel reads from distributed storage.
 | --- | --- | --- |
 | Single-file portability | ✅ One `.nc` per month | ❌ Directory tree or object prefix |
 | Interoperability | ✅ EnergyPlus, TRNSYS, MATLAB, R, ArcGIS, CDO, NCO | ⚠️ Python/Dask-centric; limited native support in BEM tools |
-| HPC GPFS performance | ✅ h5py chunk-sliced I/O; no small-file overhead | ❌ Many small chunk files → metadata storms on GPFS |
+| HPC GPFS performance | ✅ dask-chunked I/O via xarray; no small-file overhead | ❌ Many small chunk files → metadata storms on GPFS |
 | DWD source format alignment | ✅ CF-1.x metadata preserved natively | ⚠️ Requires explicit attribute mapping |
 | Compression | ✅ zlib per-variable (complevel=1, float32) | ✅ Any codec (Blosc, Zstd …) |
 | Cloud-native parallel reads | ⚠️ Sequential time-slice reads preferred | ✅ Designed for parallel chunk reads from object storage |

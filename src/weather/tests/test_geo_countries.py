@@ -71,6 +71,26 @@ def test_bbox_to_cdo_lonlatbox_matches_w_e_s_n_order():
     assert bbox.to_cdo_lonlatbox() == (3.3, 7.2, 50.7, 53.5)
 
 
+def test_bbox_parse_round_trips_area_list():
+    bbox = BBox.parse("53.472,3.358,50.751,7.21")
+    assert bbox == BBox(north=53.472, west=3.358, south=50.751, east=7.21)
+
+
+def test_bbox_parse_wrong_count_raises():
+    with pytest.raises(ValueError, match="4 numbers"):
+        BBox.parse("53.472,3.358,50.751")
+
+
+def test_bbox_parse_non_numeric_raises():
+    with pytest.raises(ValueError, match="numeric"):
+        BBox.parse("north,west,south,east")
+
+
+def test_bbox_parse_tolerates_whitespace():
+    bbox = BBox.parse(" 53.472, 3.358 ,50.751,7.21 ")
+    assert bbox == BBox(north=53.472, west=3.358, south=50.751, east=7.21)
+
+
 # ---------------------------------------------------------------------------
 # crop.py (requires the cdo binary)
 # ---------------------------------------------------------------------------

@@ -1,18 +1,18 @@
 """MERRA-2 percentile indexer - pure CPU/numpy implementation.
 
 Mirrors ``era5_land.percentile_index``/``cosmo_rea6.percentile_index``
-(the KS-distance method actually in production for both). Derives P10,
+(the selection method actually in production for both). Derives P10,
 P50, and P90 representative-year mosaics for every grid cell across the
-MERRA-2 Europe-crop grid using the Finkelstein-Schafer (FH) KS-distance
-method applied to monthly GHI.
+MERRA-2 Europe-crop grid by ranking candidate years on cumulative
+monthly GHI, per ``docs/percentile_methodology.md``.
 
 Pipeline
 --------
 1. Load   : monthly NetCDF files (``MERRA2_<YYYY>_<MM>_all_attrs.nc``)
             read in parallel. Daily GHI sums extracted; leap days removed.
-2. KS     : For each month and cell, identify the year whose empirical
-            GHI CDF most closely matches the pooled P10/P50/P90
-            threshold (minimum absolute KS distance). Pure numpy.
+2. Select : For each month and cell, total each year's daily GHI and
+            pick the year nearest the 10th/50th/90th percentile of
+            those totals taken across years. Pure numpy.
 3. Mosaic : Spawn workers write 36 output NetCDF files (12 months x
             3 percentiles). Each worker opens one source file at a
             time and copies all variables for winning cells.
@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import tempfile
+import warnings
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import (
@@ -64,81 +65,6 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Optional Numba acceleration
-# Set WEATHER_USE_NUMBA_KS=1 to enable the Numba path in _compute_ks_for_month
-# ---------------------------------------------------------------------------
-try:
-    from numba import njit, prange  # type: ignore[import]
-    NUMBA_AVAILABLE: bool = True
-except Exception:  # noqa: BLE001
-    NUMBA_AVAILABLE = False
-
-
-if NUMBA_AVAILABLE:
-    @njit(parallel=True, cache=True)  # type: ignore[misc]
-    def _numba_ks_month(
-        stacked: np.ndarray,
-        val_p10: np.ndarray,
-        val_p50: np.ndarray,
-        val_p90: np.ndarray,
-    ) -> tuple:
-        """Compute per-cell KS argmin via a Numba parallel loop.
-
-        Parameters
-        ----------
-        stacked : np.ndarray, shape (Y, T, R, L), float32
-            Daily GHI sums for all years, days, rows, and columns.
-        val_p10 : np.ndarray, shape (R, L), float32
-            Global P10 threshold per grid cell.
-        val_p50 : np.ndarray, shape (R, L), float32
-            Global P50 threshold per grid cell.
-        val_p90 : np.ndarray, shape (R, L), float32
-            Global P90 threshold per grid cell.
-
-        Returns
-        -------
-        tuple of three np.ndarray, each shape (R, L), int32
-            Best-year index arrays for P10, P50, and P90.
-        """
-        n_years, _n_t, rows, cols = stacked.shape
-        best_p10 = np.zeros((rows, cols), dtype=np.int32)
-        best_p50 = np.zeros((rows, cols), dtype=np.int32)
-        best_p90 = np.zeros((rows, cols), dtype=np.int32)
-
-        for r in prange(rows):  # type: ignore[attr-defined]  # noqa: E741
-            for c in range(cols):
-                v10 = val_p10[r, c]
-                v50 = val_p50[r, c]
-                v90 = val_p90[r, c]
-                best_d10 = np.float32(1e9)
-                best_d50 = np.float32(1e9)
-                best_d90 = np.float32(1e9)
-                for y in range(n_years):
-                    ys = np.sort(stacked[y, :, r, c])
-                    ny = len(ys)
-                    d10 = abs(
-                        np.searchsorted(ys, v10) / ny - np.float32(0.10)
-                    )
-                    d50 = abs(
-                        np.searchsorted(ys, v50) / ny - np.float32(0.50)
-                    )
-                    d90 = abs(
-                        np.searchsorted(ys, v90) / ny - np.float32(0.90)
-                    )
-                    if d10 < best_d10:
-                        best_d10 = d10
-                        best_p10[r, c] = y
-                    if d50 < best_d50:
-                        best_d50 = d50
-                        best_p50[r, c] = y
-                    if d90 < best_d90:
-                        best_d90 = d90
-                        best_p90[r, c] = y
-
-        return best_p10, best_p50, best_p90
-
-
-# ---------------------------------------------------------------------------
 # Top-level worker functions
 #
 # These MUST be defined at module top level (not nested inside a class or
@@ -148,6 +74,39 @@ if NUMBA_AVAILABLE:
 # ---------------------------------------------------------------------------
 
 _FILENAME_RE = re.compile(r"MERRA2_(\d{4})_(\d{2})_")
+
+
+#: Written into ``source_year`` for cells that have no source data in
+#: at least one year -- e.g. every ocean cell under ERA5-Land's static
+#: land-sea mask, which is ~49% of that grid. Such cells are identical
+#: in every candidate year, so any "winner" would be an artefact of
+#: sort order rather than a real selection.
+NO_SOURCE_YEAR = -1
+
+
+def _month_hour_offset(times) -> int:
+    """Hours from the start of the calendar month to ``times[0]``.
+
+    Normally 0.  ERA5-Land's very first archive month (1950-01) is the
+    exception: its 00:00 stamp does not exist upstream, so that file
+    holds 743 hours starting at 01:00 while every other January holds
+    744.  Callers use this to write a short year into the correct slots
+    of a full-length mosaic instead of shifting it an hour early.
+
+    Parameters
+    ----------
+    times : array-like of numpy.datetime64
+        Time coordinate values, already leap-day filtered.
+
+    Returns
+    -------
+    int
+        Whole hours between the 1st of the month at 00:00 and
+        ``times[0]``.
+    """
+    t0 = np.asarray(times)[0].astype("datetime64[h]")
+    month_start = t0.astype("datetime64[M]").astype("datetime64[h]")
+    return int((t0 - month_start) / np.timedelta64(1, "h"))
 
 
 def _preprocess_single_file(file_path: str) -> dict:
@@ -184,10 +143,25 @@ def _preprocess_single_file(file_path: str) -> dict:
             leap_mask = (
                 (ds.time.dt.month == 2) & (ds.time.dt.day == 29)
             )
-            ghi = ds["GHI"].isel(time=~leap_mask).load()
+            # Keep only stamps belonging to this file's OWN calendar
+            # month. COSMO-REA6's monthly exports carry a trailing
+            # stamp from the next month, which resampled a 28-day
+            # February into 29 daily bins (30 in leap years, the last
+            # all-NaN). That both adds a spurious partial day to the
+            # year's total and leaves years with differing bin counts
+            # incomparable. No-op for ERA5-Land and MERRA-2, whose
+            # exports already stop at the month boundary.
+            in_month = ds.time.dt.month == month
+            ghi = ds["GHI"].isel(time=in_month & ~leap_mask).load()
 
+        # min_count=1 keeps a day NaN when every hour of it is NaN.
+        # Without it a masked cell (ERA5-Land's ocean is NaN at every
+        # hour of every year) sums to 0.0 and becomes indistinguishable
+        # from a real polar-night day that genuinely received no sun.
         daily_sum = (
-            ghi.resample(time="1D").sum(dim="time").values
+            ghi.resample(time="1D")
+            .sum(dim="time", min_count=1)
+            .values
         )
         return {
             "path": file_path,
@@ -335,6 +309,7 @@ def _build_month_mosaic(args: tuple) -> str:
         for key in (f"{pct}_{month_str}",)
         if key in spatial_index_maps
         for y in np.unique(spatial_index_maps[key])
+        if int(y) != NO_SOURCE_YEAR
     })
     if not sorted_years:
         return f"Month {month_str}: skipped (no spatial maps)"
@@ -345,7 +320,12 @@ def _build_month_mosaic(args: tuple) -> str:
 
     # Per-percentile (R, L) arrays: local year index that wins each cell
     pct_y_idx: dict[str, np.ndarray] = {
-        pct: np.vectorize(year_to_idx.__getitem__)(
+        # -1 for the no-source sentinel: it matches no real year
+        # index below, so those cells are simply never written and stay
+        # NaN in the mosaic.
+        pct: np.vectorize(
+            lambda _v: year_to_idx.get(int(_v), -1)
+        )(
             spatial_index_maps[f"{pct}_{month_str}"]
         ).astype(np.intp)
         for pct in ("P10", "P50", "P90")
@@ -361,7 +341,64 @@ def _build_month_mosaic(args: tuple) -> str:
             if wr.size > 0:
                 pct_winners[(pct, local_yi)] = (wr, wl)
 
-    # Scan all years to find a reference file that contains 3-D
+    # Time axes are not identical across years.  ERA5-Land's first
+    # archive month (1950-01) is missing its 00:00 stamp, so it carries
+    # 743 hours starting at 01:00 while every other January carries
+    # 744.  Sizing the mosaic from an arbitrary year -- previously the
+    # earliest winning year -- leaves the array an hour short and the
+    # next year then fails to broadcast into it.  Measure every winning
+    # year first: take the longest axis as the canonical month length
+    # and remember each year's offset.
+    year_offsets: dict[int, int] = {}
+    year_lengths: dict[int, int] = {}
+    for _year in sorted_years:
+        _fp = file_path_lookup.get((_year, month_idx))
+        if not _fp or not os.path.exists(_fp):
+            continue
+        with xr.open_dataset(_fp, engine="netcdf4") as _tds:
+            # Same clip the daily sums use (see
+            # _preprocess_single_file): drop leap days AND any stamp
+            # belonging to a neighbouring month. Without the second
+            # half the mosaic is sized one hour longer than the data
+            # it holds, and to_netcdf rejects the mismatch with
+            # "conflicting sizes for dimension 'time'".
+            _tkeep = (_tds.time.dt.month == month_idx) & ~(
+                (_tds.time.dt.month == 2) & (_tds.time.dt.day == 29)
+            )
+            _tvals = _tds.isel(time=_tkeep).time.values
+        year_offsets[_year] = _month_hour_offset(_tvals)
+        year_lengths[_year] = int(len(_tvals))
+
+    if not year_lengths:
+        return f"Month {month_str}: failed (no readable source files)"
+
+    # Offsets are relative to the EARLIEST start among the winning
+    # years, not to midnight. COSMO-REA6 stamps hours as ending
+    # (01:00 .. next month 00:00), so every one of its years starts at
+    # hour 1; anchoring on midnight would size the mosaic one slot
+    # longer than any file can fill, and since the output time
+    # coordinate is copied from a real file it would then be one stamp
+    # short of the data ("conflicting sizes for dimension 'time'").
+    _base = min(year_offsets.values())
+    for _y in year_offsets:
+        year_offsets[_y] -= _base
+    t_size = max(
+        year_offsets[_y] + year_lengths[_y] for _y in year_lengths
+    )
+
+    # Prefer a reference year whose axis spans the whole month from
+    # hour 0 -- its time coordinate is copied verbatim into the output.
+    ref_candidates = sorted(
+        year_lengths,
+        key=lambda _y: (
+            year_offsets[_y] == 0 and year_lengths[_y] == t_size,
+            year_lengths[_y],
+            -_y,
+        ),
+        reverse=True,
+    )
+
+    # Scan those years to find a reference file that contains 3-D
     # (time, y, x) variables.
     spatial_dims = {"y", "x"}
     ref_fp: str | None = None
@@ -370,18 +407,17 @@ def _build_month_mosaic(args: tuple) -> str:
     var_attrs: dict[str, dict] = {}
     ref_coords = None
     ref_attrs: dict = {}
-    t_size: int = 0
 
-    for year in sorted_years:
+    for year in ref_candidates:
         fp = file_path_lookup.get((year, month_idx))
         if not fp or not os.path.exists(fp):
             continue
         with xr.open_dataset(fp, engine="netcdf4") as _ref_ds:
-            leap = (
+            keep = (_ref_ds.time.dt.month == month_idx) & ~(
                 (_ref_ds.time.dt.month == 2)
                 & (_ref_ds.time.dt.day == 29)
             )
-            _ref_filt = _ref_ds.isel(time=~leap)
+            _ref_filt = _ref_ds.isel(time=keep)
             _candidates: list[str] = [
                 str(v) for v in _ref_filt.data_vars
                 if (
@@ -418,7 +454,6 @@ def _build_month_mosaic(args: tuple) -> str:
                 for k in _ref_filt.coords
             }
             ref_attrs = dict(_ref_filt.attrs)
-            t_size = _ref_filt.sizes.get("time", 0)
         break  # stop after first usable year
 
     if ref_fp is None or not var_names:
@@ -464,10 +499,10 @@ def _build_month_mosaic(args: tuple) -> str:
 
         # Open file once; read all variables in one pass
         with xr.open_dataset(fp, engine="netcdf4") as ds:
-            leap = (
+            keep = (ds.time.dt.month == month_idx) & ~(
                 (ds.time.dt.month == 2) & (ds.time.dt.day == 29)
             )
-            ds_filt = ds.isel(time=~leap)
+            ds_filt = ds.isel(time=keep)
             year_vars: dict[str, np.ndarray] = {
                 v: ds_filt[v].values.astype(np.float32)
                 for v in var_names
@@ -476,6 +511,7 @@ def _build_month_mosaic(args: tuple) -> str:
             }
 
         actual_t = next(iter(year_vars.values())).shape[0]
+        offset = year_offsets.get(year, 0)
 
         # Write winning cells for every percentile simultaneously
         for pct in ("P10", "P50", "P90"):
@@ -484,9 +520,9 @@ def _build_month_mosaic(args: tuple) -> str:
                 continue
             wr, wl = pct_winners[key]
             for v, year_data in year_vars.items():
-                mosaics[pct][v][:actual_t, wr, wl] = (
-                    year_data[:actual_t, wr, wl]
-                )
+                mosaics[pct][v][
+                    offset:offset + actual_t, wr, wl
+                ] = year_data[:actual_t, wr, wl]
 
         del year_vars
 
@@ -508,7 +544,13 @@ def _build_month_mosaic(args: tuple) -> str:
             out_ds["source_year"] = (
                 ["y", "x"],
                 spatial_index_maps[map_key].astype(np.int32),
-                {"description": "Source year for this percentile"},
+                {
+                    "description": (
+                        "Source year for this percentile; "
+                        f"{NO_SOURCE_YEAR} where the cell has no "
+                        "source data in at least one year"
+                    )
+                },
             )
             enc = {
                 vn: {
@@ -745,9 +787,9 @@ class Merra2PercentileIndexer:
     ) -> dict:
         """Run KS distribution matching for one month.
 
-        For each grid cell, finds the year whose empirical CDF of
-        daily GHI sums most closely matches the pooled P10, P50, and
-        P90 thresholds (minimum absolute KS distance).
+        For each grid cell, totals that year's daily GHI sums and
+        selects the year sitting nearest the 10th, 50th and 90th
+        percentile of those totals taken across all years.
 
         Parameters
         ----------
@@ -787,83 +829,76 @@ class Merra2PercentileIndexer:
             n_days = monthly_registry[month][y].shape[0]
             stacked[yi, :n_days] = monthly_registry[month][y]
 
-        # Global pooled CDF thresholds: shape (R, L)
-        pooled_sorted = np.sort(
-            stacked.reshape(
-                n_years * max_days, self.n_y, self.n_lon
-            ),
-            axis=0,
-        )
-        n_pool = pooled_sorted.shape[0]
-        val_p10 = pooled_sorted[int(n_pool * 0.10)]
-        val_p50 = pooled_sorted[int(n_pool * 0.50)]
-        val_p90 = pooled_sorted[int(n_pool * 0.90)]
-        del pooled_sorted
+        # Per-year monthly GHI total for every cell: shape (Y, R, L).
+        # This is the ranking metric documented in
+        # docs/percentile_methodology.md section 2 -- ASHRAE TMY3 ranks
+        # candidate years by cumulative monthly global radiation.
+        #
+        # It replaces a "fraction of this year's days at or below the
+        # pooled P-threshold" statistic that could not deliver the
+        # documented P-levels: a TYPICAL year has ~10% of its days
+        # below the pooled P10 by definition, so argmin|cdf - 0.10|
+        # picked the typical year and rejected genuinely cloudy ones,
+        # and argmin|cdf - 0.90| likewise rejected sunny ones. Being a
+        # count / max_days it also quantised to max_days + 1 levels, so
+        # dozens of years tied in every cell and np.argmin handed each
+        # tie to whichever year sorted first.
+        year_total = stacked.sum(axis=1, dtype=np.float64)
 
-        use_numba = (
-            NUMBA_AVAILABLE
-            and os.getenv("WEATHER_USE_NUMBA_KS", "0") == "1"
-        )
-        if use_numba:
-            best_p10, best_p50, best_p90 = _numba_ks_month(
-                stacked, val_p10, val_p50, val_p90
-            )
-        else:
-            # Per-year CDF fraction: what share of a year's days
-            # fall at or below each global threshold?
-            # sorted_years shape: (Y, T, R, L)
-            sorted_years = np.sort(stacked, axis=1)
+        # Target radiation level per percentile, taken ACROSS years.
+        # np.quantile interpolates between the two bracketing years;
+        # argmin then snaps to whichever real year sits nearest, so the
+        # chosen year's brightness rank comes out at ~= q.
+        # A year with no data at a cell must not compete for it, but it
+        # must not disqualify the cell either: one bad year previously
+        # invalidated every cell of the month.
+        finite = np.isfinite(year_total)
 
-            # cdf shape: (Y, R, L)
-            cdf_p10 = (
-                np.sum(
-                    sorted_years <= val_p10[None, None],
-                    axis=1,
-                ).astype(np.float32)
-                / max_days
-            )
-            cdf_p50 = (
-                np.sum(
-                    sorted_years <= val_p50[None, None],
-                    axis=1,
-                ).astype(np.float32)
-                / max_days
-            )
-            cdf_p90 = (
-                np.sum(
-                    sorted_years <= val_p90[None, None],
-                    axis=1,
-                ).astype(np.float32)
-                / max_days
-            )
-            del sorted_years
+        best: dict[float, np.ndarray] = {}
+        with warnings.catch_warnings():
+            # All-NaN cells are expected (ocean); they are flagged
+            # below rather than ranked.
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            for _q in (0.10, 0.50, 0.90):
+                _target = np.nanquantile(year_total, _q, axis=0)
+                _dist = np.where(
+                    finite, np.abs(year_total - _target[None]), np.inf
+                )
+                best[_q] = np.argmin(_dist, axis=0).astype(np.int32)
+                del _target, _dist
 
-            best_p10 = np.argmin(
-                np.abs(cdf_p10 - 0.10), axis=0
-            ).astype(np.int32)
-            best_p50 = np.argmin(
-                np.abs(cdf_p50 - 0.50), axis=0
-            ).astype(np.int32)
-            best_p90 = np.argmin(
-                np.abs(cdf_p90 - 0.90), axis=0
-            ).astype(np.int32)
-            del cdf_p10, cdf_p50, cdf_p90
+        # Flag only cells no year can speak for at all -- e.g. ocean
+        # under ERA5-Land's static land-sea mask. Ranking those would
+        # just hand them to whichever year sorts first.
+        valid_cell = finite.any(axis=0)
+
+        best_p10 = best[0.10]
+        best_p50 = best[0.50]
+        best_p90 = best[0.90]
+        del year_total, best, finite
 
         year_arr = np.array(available_years, dtype=np.int32)
         tag = f"{month:02d}"
+
+        selections: dict[str, np.ndarray] = {}
+        for _name, _best in (
+            ("P10", best_p10), ("P50", best_p50), ("P90", best_p90)
+        ):
+            _sel = year_arr[_best]
+            _sel[~valid_cell] = NO_SOURCE_YEAR
+            selections[f"{_name}_{tag}"] = _sel
+
         logger.info(
-            "Month %s KS done (P10 %d unique years, "
-            "P50 %d, P90 %d)",
+            "Month %s selection done (%d cell(s) without source data; "
+            "unique years P10 %d, P50 %d, P90 %d)",
             tag,
-            len(np.unique(best_p10)),
-            len(np.unique(best_p50)),
-            len(np.unique(best_p90)),
+            int((~valid_cell).sum()),
+            *(
+                len(np.unique(selections[f"{_p}_{tag}"][valid_cell]))
+                for _p in ("P10", "P50", "P90")
+            ),
         )
-        return {
-            f"P10_{tag}": year_arr[best_p10],
-            f"P50_{tag}": year_arr[best_p50],
-            f"P90_{tag}": year_arr[best_p90],
-        }
+        return selections
 
     # ------------------------------------------------------------------
     # Phase 3: mosaic assembly

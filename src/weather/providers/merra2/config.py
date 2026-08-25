@@ -27,7 +27,7 @@ def get_config() -> dict[str, Any]:
         Keys: ``work_dir``, ``download_dir``, ``processed_dir``,
         ``output_dir``, ``year``, ``attributes``, ``ncores``,
         ``threads_per_job``, ``conda_env``, ``cleanup``, ``area``,
-        ``opendap_max_concurrent``.
+        ``region_tag``, ``opendap_max_concurrent``.
     """
     return {
         "work_dir": EnvSettings.merra2_work_dir(),
@@ -43,6 +43,9 @@ def get_config() -> dict[str, Any]:
         # Geographic crop [N, W, S, E]; required, see
         # EnvSettings.merra2_area.
         "area": EnvSettings.merra2_area(),
+        # Region tag for the downloaded raw file's name (e.g. "NL"),
+        # None for the default/untagged case -- see local_path().
+        "region_tag": EnvSettings.merra2_region_tag(),
         # GES DISC OPeNDAP has no CDS-style per-account job queue, so
         # this can be higher than ERA5's cds_max_concurrent=1.
         "opendap_max_concurrent": EnvSettings.merra2_opendap_max_concurrent(),

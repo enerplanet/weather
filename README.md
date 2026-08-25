@@ -169,6 +169,37 @@ Default provider can be set with:
 export WEATHER_PROVIDER=cosmo-rea6
 ```
 
+## Unified fetch CLI (`weather fetch`)
+
+One command across all three providers, covering fetch + concatenate +
+percentile in a single call — wraps existing `run_pipeline()`/`NetCDFMerger`/
+`*PercentileIndexer`/`weather.geo` machinery, no new business logic:
+
+```bash
+weather fetch --range single-month --year 2018 --month 3
+
+weather fetch --provider merra-2 --range single-year --year 2023 \
+    --country netherlands --concatenate all
+
+weather fetch --provider era5-land --range multi-year \
+    --from-year 2015 --to-year 2020 --concatenate per-year
+```
+
+Key flags: `--range {single-month,single-year,multi-year}` (required),
+`--concatenate {none,per-year,all}` (merges monthly output via
+`NetCDFMerger`), `--percentile` (runs the provider's percentile indexer over
+its whole archive), `--country NAME`/`--bbox N,W,S,E` (all three providers —
+real pre-download server-side area restriction for era5-land/merra-2, a
+local post-decompress crop for cosmo-rea6 since DWD has no server-side
+subsetting; ISO-code-tagged output filenames either way). Full flag
+reference, provider-compatibility matrix, and resume/tagging caveats:
+`docs/WEATHER_FETCH_GUIDE.md`.
+
+`weather fetch` is additive — it does not replace or modify
+`test_<provider>_{one_month,one_year,multi_year}.py` or the production
+bulk-run scripts (`scripts/run_era5_bulk.sh`/`scripts/run_merra2_bulk.sh`),
+which remain the recommended path for unattended whole-archive runs.
+
 ## Point-query API (for downstream consumers)
 
 For a downstream package (e.g. `buem`) that just needs hourly weather at
@@ -205,9 +236,11 @@ weather geo crop --input ERA5_LAND_2018_all_attrs.nc \
     --output ERA5_LAND_2018_netherlands.nc --country netherlands
 ```
 
-Crops an already-exported ERA5-Land/MERRA-2 NetCDF to a country's
-bounding box via `cdo sellonlatbox`. Not yet supported for COSMO-REA6
-output on `cdo`-side cropping; see `CLAUDE.md` for the current status.
+Crops an already-exported NetCDF (any provider — ERA5-Land, MERRA-2, or
+COSMO-REA6) to a country's bounding box via `cdo sellonlatbox`. Needs the
+`cdo` binary (no win-64 build, so not usable on Windows). Files exported
+before 2026-08-14 need a one-time retroactive metadata patch first — see
+`docs/WEATHER_GEO_GUIDE.md` and `docs/cdo_crop_cf_metadata.md`.
 
 ## Shell Script Paths
 
@@ -216,6 +249,10 @@ output on `cdo`-side cropping; see `CLAUDE.md` for the current status.
 - Slurm container run: `scripts/run_pipeline_container.sh`
 - Build container image: `scripts/build_container.sh`
 - Create/update conda env: `scripts/setup_env.sh`
+- Launch the point-query HTTP API: `scripts/launch_weather_serve.sh`
+  (detached, PID/log files under `logs/`; reads `WEATHER_API_KEYS` from
+  `.env` — never hardcode a key in the script itself, it's committed to
+  the repo. See `src/weather/api/README.md` for the full deploy runbook.)
 
 Default server paths used by scripts:
 

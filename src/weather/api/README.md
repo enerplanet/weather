@@ -78,7 +78,7 @@ egress, per the production-access design discussion (see buem's CLAUDE.md,
 fine for the single-process dev server below, not for a multi-worker WSGI
 deployment (would need a shared store, e.g. redis, at that point).
 
-## Running it
+## Running it locally
 
 Local dev server:
 
@@ -119,12 +119,11 @@ it already builds — BuEM's own `/api/process` accepts a pre-resolved
 `buem-gateway` nor BuEM itself fetches from this API — confirmed
 directly by the Orchestrator's own developer, not inferred.
 
-## Still open before this can be real (not decided here)
+## Still open (not decided here)
 
-- Where this actually runs relative to the data host (on `sd26` itself vs.
-  a small gateway host) and how the Orchestrator's production egress
-  reaches it — needs the IT conversation flagged in buem's CLAUDE.md, not
-  a code change.
+- Where this actually runs relative to the data host and how the
+  Orchestrator's production egress reaches it — needs the IT conversation
+  flagged in buem's CLAUDE.md, not a code change.
 - The Orchestrator itself doesn't exist in code yet, so nothing calls this
   API in production today — this is architectural placement, not a
   working integration.

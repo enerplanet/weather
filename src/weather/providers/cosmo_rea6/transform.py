@@ -42,7 +42,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 
+from ...common.cf_conventions import attach_cf_latlon_attrs
 from ...common.derived_attributes import (
     DNI_ELEVATION_THRESHOLD_DEG,
     dewpoint_from_rh,
@@ -54,6 +56,8 @@ from .downloaded_attributes import ATTRIBUTES, canonical_name, passthrough_attrs
 
 if TYPE_CHECKING:
     import xarray  # noqa: F401  # type: ignore[import-untyped]
+
+    from ...geo.bbox import BBox
 
 logger = logging.getLogger(__name__)
 
@@ -595,7 +599,6 @@ def compute_dni(
     Spencer, J. W. (1971). Fourier series representation of the position
     of the sun.  *Search*, 2(5), 172.
     """
-    import pandas as pd
 
     xr = _import_xarray()
 
@@ -1156,6 +1159,7 @@ def build_annual_dataset(
             latitude=(("y", "x"), lat_2d),
             longitude=(("y", "x"), lon_2d),
         )
+        attach_cf_latlon_attrs(out)
 
     if include_wind_components:
         u_raw = _strip_scalar_coords(_resolve_var(ds_u, "u10"))
@@ -1208,6 +1212,7 @@ def build_month_dataset(
     *,
     grb_dir: Path | None = None,
     compute_dni_field: bool = True,
+    crop_bbox: BBox | None = None,
 ) -> tuple[xarray.Dataset, dict[str, xarray.Dataset]]:
     """Assemble one month's full COSMO-REA6 output dataset.
 
@@ -1233,6 +1238,12 @@ def build_month_dataset(
         If ``True`` (default), also compute the experimental per-cell
         DNI (see :func:`compute_dni`). Set ``False`` to skip it (e.g.
         ``--skip-dni``).
+    crop_bbox : BBox, optional
+        If given, crop every attribute to this bbox's ``(y, x)`` index
+        window (see :mod:`.crop`) immediately after opening, before any
+        derived-field computation -- default ``None`` means the crop
+        module is never imported or called at all (hard no-op, not just
+        a trivial pass-through).
 
     Returns
     -------
@@ -1249,6 +1260,14 @@ def build_month_dataset(
         attr: open_grib_month(attr, year, month, grb_dir=grb_dir)
         for attr in ATTRIBUTES
     }
+
+    if crop_bbox is not None:
+        from .crop import compute_crop_index, crop_datasets
+
+        y_slice, x_slice = compute_crop_index(
+            crop_bbox, datasets["SWDIRS_RAD"]
+        )
+        datasets = crop_datasets(datasets, y_slice, x_slice)
 
     # See build_annual_dataset for why this is captured before the
     # derived-variable strip below.
@@ -1312,6 +1331,7 @@ def build_month_dataset(
             latitude=(("y", "x"), lat_2d),
             longitude=(("y", "x"), lon_2d),
         )
+        attach_cf_latlon_attrs(ds_out)
     logger.info(
         "Month dataset assembled: %d variables, %d timesteps",
         len(ds_out.data_vars), ds_out.sizes.get("time", 0),

@@ -22,24 +22,6 @@ conda activate weather_env
 pip install -e . --no-deps
 ```
 
-### `ModuleNotFoundError: No module named 'h5py'`
-
-**Cause:** h5py was added to `weather_env.yml` recently and your existing
-environment has not been updated.
-
-**Fix:**
-
-```bash
-# Update the existing environment (preferred):
-conda env update -n weather_env -f infrastructure/env/weather_env.yml --prune
-
-# Or install directly into the active environment:
-conda install -n weather_env -c conda-forge "h5py=3.11.*"
-
-# Verify:
-python -c "import h5py; print(h5py.__version__)"
-```
-
 ### `ModuleNotFoundError: No module named 'pvlib'`
 
 **Cause:** pvlib is an optional dependency used only for MERRA-2 and
@@ -130,18 +112,25 @@ underlying file descriptor has been invalidated by a network interruption or
 a fork().  It typically occurs when `xr.open_mfdataset` is used to merge
 many large files.
 
-**Fix:** Use `weather.common.merge.NetCDFMerger` (h5py-based) instead of
-`xr.open_mfdataset + to_netcdf`:
+**Update (2026-08-12):** `weather.common.merge.NetCDFMerger` was rewritten
+from hand-rolled h5py to `xr.open_mfdataset`/`to_netcdf` (fixing two
+separate, more severe bugs in the old implementation — missing HDF5
+dimension scales and silently wrong cross-file timestamps; see
+`docs/WEATHER_FETCH_GUIDE.md`'s history notes). This means the advice
+below no longer applies as written: `NetCDFMerger` now uses
+`xr.open_mfdataset` internally, so it no longer sidesteps this bug by
+construction the way the old h5py implementation did.
 
-```bash
-python -m weather.common.merge \
-    --input  /data/output/COSMO_REA6_2018_??_all_attrs.nc \
-    --output /data/output/COSMO_REA6_2018_annual_all_attrs.nc
-```
-
-`NetCDFMerger` uses h5py which has its own file handles independent of the
-netCDF4-C library, and reads data in 168-timestep slices so it never holds
-a large number of open file descriptors simultaneously.
+What's actually known: a real, full-scale production merge with the new
+implementation (112 GB, 12 monthly COSMO-REA6 files, ~5.4 hours, real
+GPFS/NFS-mounted storage) completed with zero `NetCDF: Not a valid ID`
+errors. That's evidence the new implementation doesn't trip this bug in
+practice, not proof the underlying risk is gone — the specific trigger
+condition (fork() or a network interruption invalidating a file
+descriptor mid-run) wasn't deliberately reproduced. If you hit this
+error with the current `NetCDFMerger`, the still-relevant mitigation is
+`HDF5_USE_FILE_LOCKING=FALSE` (see item 3 above) plus retrying the
+merge — there is currently no h5py-based fallback path to reach for.
 
 ---
 
@@ -348,3 +337,31 @@ where the robust opener replaces any static `filter_by_keys`.
 **The `.idx` files next to `.grb` files are normal:** cfgrib writes an
 ECCODES index cache file (`.grb.idx`) alongside every GRIB file on first
 open.  These files speed up subsequent reads and are harmless.
+
+## 13. `weather geo crop` / `cdo sellonlatbox` aborts: `Unsupported grid type: generic`
+
+**Symptom:**
+
+```text
+cdi    warning (set_coordinates_varids): Coordinates variable latitude can't be assigned!
+cdi    warning (set_coordinates_varids): Coordinates variable longitude can't be assigned!
+cdo    sellonlatbox (Warning): Unsupported grid type: generic
+cdo    sellonlatbox (Abort): No processable variable found!
+```
+
+**Cause:** The output file's `latitude`/`longitude` coordinate variables
+are missing CF `standard_name`/`units` attributes (only `_FillValue` is
+set) — an `xarray.Dataset.assign_coords()` artifact in each provider's
+`transform.py`, present in every export before this was fixed. CDO can't
+identify the coordinates without them and falls back to a grid type with
+no geographic meaning at all.
+
+**Fix (already applied for new exports):** `transform.py` now calls
+`common.cf_conventions.attach_cf_latlon_attrs()` right after assigning
+`latitude`/`longitude`, for all three providers.
+
+**If you hit this against an already-exported file**, it predates the
+fix and needs the same attributes patched in (metadata-only, no data
+recomputation — see the full writeup for the exact approach and the
+retroactive pass already run against the COSMO-REA6 and MERRA-2
+archives): [cdo_crop_cf_metadata.md](cdo_crop_cf_metadata.md).

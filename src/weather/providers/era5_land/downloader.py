@@ -94,11 +94,27 @@ class Era5Downloader(BaseDownloader):
         return "nc" if ext in ("netcdf", "nc") else "grib"
 
     def local_path(self, job: DownloadJob) -> Path:
-        """``<download_dir>/ERA5_LAND_<YYYY>_<MM>_all_attrs.<ext>``."""
+        """``<download_dir>/ERA5_LAND_<YYYY>_<MM>_all_attrs.<ext>``, or
+        ``ERA5_LAND_<TAG>_<YYYY>_<MM>_all_attrs.<ext>`` when
+        ``cfg["region_tag"]`` is set (see :meth:`content_key`'s
+        docstring for why this alone isn't sufficient protection)."""
+        tag = self._cfg.get("region_tag")
+        tag_part = f"{tag}_" if tag else ""
         fname = (
-            f"ERA5_LAND_{job.year}_{job.month:02d}_all_attrs.{self._ext()}"
+            f"ERA5_LAND_{tag_part}{job.year}_{job.month:02d}"
+            f"_all_attrs.{self._ext()}"
         )
         return self._cfg["download_dir"] / fname
+
+    def content_key(self, job: DownloadJob) -> str | None:
+        """The configured area, as a stable string -- ``"GLOBAL"`` when
+        unset. Two different areas for the same year/month must never
+        be treated as the same downloaded content, even if they'd
+        otherwise share a :meth:`local_path` (e.g. two different
+        callers that both leave ``region_tag`` unset, such as the
+        documented ``export ERA5_AREA=...`` bulk-run workflow)."""
+        area = self._cfg.get("area")
+        return ",".join(str(v) for v in area) if area else "GLOBAL"
 
     def _build_request(self, job: DownloadJob) -> dict[str, Any]:
         """CDS request for one month, all configured variables."""
