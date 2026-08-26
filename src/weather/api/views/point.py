@@ -144,8 +144,14 @@ class PointView(MethodView):
             # encoding/json) rejects the whole response outright. Real,
             # not hypothetical: ERA5-Land's boundary-repaired archive-start
             # hour is exactly this case (see docs/COUNTRY_SCOPED_ARCHIVES.md).
+            #
+            # Rounded to 2 decimals: the archives are float32 (~7 significant
+            # digits) promoted to float64, so anything past a couple of
+            # decimal places on a degC/(W/m2) value is float noise, not
+            # signal -- serializing it full-precision only bloats a payload
+            # that's already large for a year of hourly, multi-variable data.
             def _col(name: str) -> list:
-                return [None if pd.isna(v) else float(v) for v in out[name]]
+                return [None if pd.isna(v) else round(float(v), 2) for v in out[name]]
 
             out = df.reset_index()
             # Data is UTC by construction throughout the pipeline (see

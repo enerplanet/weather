@@ -1,4 +1,4 @@
-"""GET /v1/health -- liveness check."""
+"""GET /v1/weather/health -- liveness check."""
 
 from __future__ import annotations
 
