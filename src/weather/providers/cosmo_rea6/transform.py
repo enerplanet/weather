@@ -55,7 +55,7 @@ from ...common.derived_attributes import (
 from .downloaded_attributes import ATTRIBUTES, canonical_name, passthrough_attrs
 
 if TYPE_CHECKING:
-    import xarray  # noqa: F401  # type: ignore[import-untyped]
+    import xarray  # type: ignore[import-untyped]
 
     from ...geo.bbox import BBox
 
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 def _import_xarray():
     """Lazy-import xarray (heavy dependency, not needed at module level)."""
     try:
-        import xarray as xr  # noqa: F811  # type: ignore[import-untyped]
+        import xarray as xr  # type: ignore[import-untyped]
         return xr
     except ImportError as exc:
         raise ImportError(
@@ -97,7 +97,7 @@ def _open_grib_robust(
     where DWD packed the same attribute with a different ``uvRelativeToGrid``
     encoding than usual.
     """
-    _common = dict(engine="cfgrib", chunks={"time": 168})
+    _common = {"engine": "cfgrib", "chunks": {"time": 168}}
 
     # Pass 1 — no filter (handles ~22/24 years without any issue)
     try:
@@ -134,7 +134,7 @@ def _open_grib_robust(
                 uv_flag, grb_path.name, exc,
             )
             continue
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Other errors (e.g., cfgrib parsing errors) - log and continue
             logger.debug(
                 "uvRelativeToGrid=%d raised unexpected error for %s: %s",
