@@ -4,18 +4,9 @@ info:
   title: weather point-query API
   version: 0.3.0
   description: |
-    Hourly weather for a single location and year, read from
-    already-processed archives. Given a provider, latitude, longitude
+    Serves preprocessed Hourly weather data for a single location and year, read from. Given a provider, latitude, longitude
     and year, the API returns the nearest grid cell's hourly series for
     the variables you ask for.
-
-    The service exists because the processed archives sit behind a
-    university VPN that a request-serving container cannot join. This
-    API runs inside that network boundary so callers can reach the data
-    over plain HTTP without filesystem or bulk archive access.
-
-    It does not download or process anything. The relevant provider
-    pipeline must already have run for the year you request.
 
     ## Quick start
 
@@ -507,6 +498,10 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: invalid_api_key
+              message: invalid or missing X-API-Key
     RateLimited:
       description: Per-key rate limit exceeded.
       headers:
@@ -522,6 +517,10 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: rate_limit_exceeded
+              message: rate limit exceeded
 
   headers:
     RateLimitLimit:
