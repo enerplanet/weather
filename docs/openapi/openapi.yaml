@@ -4,9 +4,9 @@ info:
   title: weather point-query API
   version: 0.3.0
   description: |
-    Serves preprocessed Hourly weather data for a single location and year, read from. Given a provider, latitude, longitude
-    and year, the API returns the nearest grid cell's hourly series for
-    the variables you ask for.
+    Serves preprocessed hourly weather data for a single location and
+    year. Given a provider, latitude, longitude and year, the API returns
+    the nearest grid cell's hourly series for the variables you ask for.
 
     ## Quick start
 
@@ -99,6 +99,13 @@ info:
   contact:
     name: UU-BUEM
     url: https://github.com/UU-BUEM/weather
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local instance (weather serve --host 127.0.0.1 --port 8080). Not publicly hosted.
+
+security:
+  - ApiKeyAuth: []
 
 tags:
   - name: Weather
