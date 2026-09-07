@@ -18,9 +18,14 @@ UNKNOWN_USE_CASE = "unknown_use_case"
 VARIABLES_USE_CASE_CONFLICT = "variables_use_case_conflict"
 VARIABLES_USE_CASE_REQUIRED = "variables_use_case_required"
 
-# 401 / 404 / 429 / 503
+# 401 / 404 / 422 / 429 / 503
 INVALID_API_KEY = "invalid_api_key"
 ARCHIVE_NOT_FOUND = "archive_not_found"
+# Archive file is present but cannot satisfy this request and retrying it
+# unchanged never will: an unrepaired boundary month, a file predating a
+# data-format convention, or a variable missing from an older archive.
+# Clearing it needs an operator to rebuild that archive.
+ARCHIVE_NOT_SERVABLE = "archive_not_servable"
 RATE_LIMIT_EXCEEDED = "rate_limit_exceeded"
 SERVICE_UNAVAILABLE = "service_unavailable"
 

@@ -125,12 +125,14 @@ class PointView(MethodView):
             # ERA5-Land boundary month (RuntimeError), a file that
             # predates the lat/lon-retention convention, or a requested
             # variable this archive predates the export of (KeyError).
-            # All are real, actionable server-side data problems, not
-            # a bad request or a crash -- surface them as such instead
-            # of falling through to Flask's generic unhelpful 500.
+            # 422, not 503: the archive is present but cannot satisfy
+            # this request, and retrying it unchanged never will --
+            # clearing it needs an operator to re-run the pipeline's
+            # transform/export (or boundary_repair). A retryable 5xx
+            # sends a proxy into a pointless retry loop.
             return jsonify(
-                error=error_body(errors.SERVICE_UNAVAILABLE, str(exc))
-            ), 503
+                error=error_body(errors.ARCHIVE_NOT_SERVABLE, str(exc))
+            ), 422
 
         if request.args.get("format", "parquet").lower() == "json":
             # JSON mode: same cached DataFrame, nested as

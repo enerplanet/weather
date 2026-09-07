@@ -62,11 +62,16 @@ info:
 
     - `404` no archive exists for that provider and year
 
+    - `422` the archive exists but cannot satisfy this request: an
+      unrepaired boundary month, a file predating a data-format
+      convention, or a variable missing from an older archive. Retrying
+      the same request will not help; the archive needs rebuilding by an
+      operator.
+
     - `429` rate limit exceeded, see below
 
-    - `503` the archive exists but is not possible to serve, which is a
-      server-side data problem rather than a bad request. Retrying the
-      same request will not help.
+    - `503` the server is not ready: no API keys are configured. Not
+      returned for data problems.
 
     All error responses share the same shape: a JSON object with a
     single `error` field, itself an object with `code` (a stable,
@@ -234,14 +239,13 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "503":
+        "422":
           description: |
-            Archive exists but is not servable: an unrepaired ERA5-Land
-            boundary month, a file predating the lat/lon retention
-            convention, or a requested variable this archive predates.
-            Server-side data problem, not a bad request.
+            Archive exists but cannot satisfy this request: an unrepaired
+            ERA5-Land boundary month, a file predating the lat/lon
+            retention convention, or a requested variable this archive
+            predates. Retrying unchanged will not help; the archive needs
+            rebuilding by an operator. Error code: archive_not_servable.
           headers:
             RateLimit-Limit:
               $ref: "#/components/headers/RateLimitLimit"
@@ -253,6 +257,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /v1/weather/validate:
     get:

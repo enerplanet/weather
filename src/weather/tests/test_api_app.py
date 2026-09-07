@@ -244,7 +244,7 @@ def test_weather_point_archive_not_found_is_404(client, monkeypatch):
     assert resp.get_json()["error"]["code"] == errors.ARCHIVE_NOT_FOUND
 
 
-def test_weather_point_unservable_archive_is_503(client, monkeypatch):
+def test_weather_point_unservable_archive_is_422(client, monkeypatch):
     import weather
 
     def _raise(*args, **kwargs):
@@ -255,8 +255,8 @@ def test_weather_point_unservable_archive_is_503(client, monkeypatch):
         "/v1/weather/point?provider=merra-2&lat=20.0&lon=20.0&year=2002&use_case=solar",
         headers={"X-API-Key": API_KEY},
     )
-    assert resp.status_code == 503
-    assert resp.get_json()["error"]["code"] == errors.SERVICE_UNAVAILABLE
+    assert resp.status_code == 422
+    assert resp.get_json()["error"]["code"] == errors.ARCHIVE_NOT_SERVABLE
 
 
 def test_weather_point_rate_limited_is_429(monkeypatch):

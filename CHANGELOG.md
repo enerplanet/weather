@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: `GET /v1/weather/point` returns `422` with error code
+  `archive_not_servable` (was `503` `service_unavailable`) when the
+  archive exists but cannot satisfy the request: an unrepaired ERA5-Land
+  boundary month, a file predating the lat/lon retention convention, or a
+  requested variable an older archive predates. This is a permanent
+  condition, retrying the same request never clears it, so a retryable
+  `5xx` was the wrong signal. `503` from `/v1/weather/point` now means
+  only "no API keys configured on the server". Other routes unchanged.
+
 - `GET /v1/weather/health` no longer requires an `X-API-Key` and is not
   rate limited. A container or orchestrator liveness probe can now reach
   it without a credential, and it answers `200` even when
