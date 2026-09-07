@@ -10,7 +10,8 @@ info:
 
     ## Quick start
 
-    Every request needs an `X-API-Key` header.
+    Every request needs an `X-API-Key` header, except
+    `GET /v1/weather/health`.
 
     1. `GET /v1/weather/variables` to see which variables exist and
        which `use_case` shortcuts group them.
@@ -428,46 +429,25 @@ paths:
       tags: [Health]
       summary: Liveness check
       description: |
-        Does no filesystem I/O. Use /v1/weather/providers to check
-        whether archives are actually available. Nested under `/weather/`
-        rather than a bare `/v1/health` -- other services reached through
-        the same Orchestrator expose their own `/health` too, and this
-        avoids a path collision if those are ever aggregated behind one
-        host.
+        Needs no `X-API-Key` and is not rate limited, so a container or
+        orchestrator probe can reach it without a credential. Returns a
+        constant and does no filesystem I/O; use /v1/weather/providers to
+        check whether archives are actually available. Nested under
+        `/weather/` rather than a bare `/v1/health` -- other services
+        reached through the same Orchestrator expose their own `/health`
+        too, and this avoids a path collision if those are ever
+        aggregated behind one host.
       operationId: getHealth
+      security: []
       responses:
         "200":
           description: OK
-          headers:
-            RateLimit-Limit:
-              $ref: "#/components/headers/RateLimitLimit"
-            RateLimit-Remaining:
-              $ref: "#/components/headers/RateLimitRemaining"
-            RateLimit-Reset:
-              $ref: "#/components/headers/RateLimitReset"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthResponse"
               example:
                 status: ok
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "503":
-          description: Server misconfigured, no API keys set.
-          headers:
-            RateLimit-Limit:
-              $ref: "#/components/headers/RateLimitLimit"
-            RateLimit-Remaining:
-              $ref: "#/components/headers/RateLimitRemaining"
-            RateLimit-Reset:
-              $ref: "#/components/headers/RateLimitReset"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
 
 components:
   securitySchemes:

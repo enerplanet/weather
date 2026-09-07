@@ -7,6 +7,12 @@ from typing import Any
 from flask import jsonify
 from flask.views import MethodView
 
+#: Route path. Exempt from API-key auth and rate limiting (see
+#: auth.make_authenticate and rate_limit.make_rate_limit_headers) so
+#: container/orchestrator health checks and uptime monitors can reach it
+#: without a credential. The handler returns a constant and does no I/O.
+HEALTH_PATH = "/v1/weather/health"
+
 
 class HealthView(MethodView):
     def get(self) -> Any:

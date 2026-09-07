@@ -8,6 +8,8 @@ from collections.abc import Callable
 
 from flask import Response, request
 
+from .views.health import HEALTH_PATH
+
 
 class RateLimiter:
     """Minimal fixed-window limiter, per API key.
@@ -38,6 +40,12 @@ def make_rate_limit_headers(limiter: RateLimiter) -> Callable[[Response], Respon
     """Build the after_request hook that reports rate-limit state."""
 
     def _rate_limit_headers(response: Response) -> Response:
+        # Health is exempt from the limiter (see auth.make_authenticate),
+        # so it carries no RateLimit-* headers -- reporting a budget that
+        # does not apply to it would be misleading.
+        if request.path == HEALTH_PATH:
+            return response
+
         # Reads RateLimiter's existing state directly rather than adding
         # methods to the class -- its internals are out of scope for this
         # change. allow() already ran once in _authenticate() for this

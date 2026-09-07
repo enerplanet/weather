@@ -12,6 +12,7 @@ from flask import jsonify, request
 from .. import errors
 from ..errors import error_body
 from .rate_limit import RateLimiter
+from .views.health import HEALTH_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,13 @@ def make_authenticate(limiter: RateLimiter) -> Callable[[], Any]:
     """Build the before_request hook: API-key check, then rate limit."""
 
     def _authenticate() -> Any:
+        # Liveness probe: no key, no rate-limit budget, and answerable even
+        # when WEATHER_API_KEYS is unset -- a misconfigured server is still
+        # a running process, and failing liveness on it just causes a
+        # restart loop that a restart never fixes.
+        if request.path == HEALTH_PATH:
+            return None
+
         valid_keys = _valid_api_keys()
         if not valid_keys:
             logger.error(

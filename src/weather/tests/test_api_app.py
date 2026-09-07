@@ -335,10 +335,33 @@ def test_weather_variables_discovery_requires_api_key(client):
     assert resp.status_code == 401
 
 
-def test_health_is_liveness_only(client):
-    resp = client.get("/v1/weather/health", headers={"X-API-Key": API_KEY})
+def test_health_needs_no_api_key(client):
+    resp = client.get("/v1/weather/health")
     assert resp.status_code == 200
     assert resp.get_json() == {"status": "ok"}
+    # Exempt from the limiter, so no budget headers that don't apply to it.
+    assert "RateLimit-Limit" not in resp.headers
+
+
+def test_health_answers_when_no_api_keys_configured(monkeypatch):
+    monkeypatch.delenv("WEATHER_API_KEYS", raising=False)
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        resp = c.get("/v1/weather/health")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "ok"}
+
+
+def test_health_not_rate_limited(monkeypatch):
+    monkeypatch.setenv("WEATHER_API_KEYS", API_KEY)
+    monkeypatch.setenv("WEATHER_API_RATE_LIMIT", "1")
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        assert c.get("/v1/weather/health").status_code == 200
+        assert c.get("/v1/weather/health").status_code == 200
+        assert c.get("/v1/weather/health").status_code == 200
 
 
 def test_weather_providers_endpoint(client, monkeypatch):

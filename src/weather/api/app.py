@@ -13,7 +13,7 @@ from flask import Flask, Response, request
 
 from .auth import make_authenticate
 from .rate_limit import RateLimiter, make_rate_limit_headers
-from .views.health import HealthView
+from .views.health import HEALTH_PATH, HealthView
 from .views.point import PointView
 from .views.providers import ProvidersView
 from .views.validate import ValidateView
@@ -48,7 +48,7 @@ def create_app() -> Flask:
     # /v1/weather/health, not /v1/health -- other services behind the same
     # Orchestrator expose their own /health too; nesting under /weather/
     # avoids a path collision if those are ever aggregated behind one host.
-    app.add_url_rule("/v1/weather/health", view_func=HealthView.as_view("health"))
+    app.add_url_rule(HEALTH_PATH, view_func=HealthView.as_view("health"))
     app.add_url_rule(
         "/v1/weather/providers", view_func=ProvidersView.as_view("weather_providers")
     )

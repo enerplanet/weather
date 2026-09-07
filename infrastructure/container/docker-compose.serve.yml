@@ -72,12 +72,8 @@ services:
     ports:
       - "${WEATHER_API_PORT:-8090}:8080"
     healthcheck:
-      # Assumes a single key in WEATHER_API_KEYS for local/dev use -- a
-      # genuinely multi-key value won't match here, since this doesn't
-      # split on commas. Fine for the healthcheck's purpose (is the
-      # process up and authenticating requests at all), not a general
-      # multi-key test.
-      test: ["CMD-SHELL", "wget -q -O /dev/null --header=\"X-API-Key: $$WEATHER_API_KEYS\" http://localhost:8080/v1/weather/health || exit 1"]
+      # /v1/weather/health needs no API key (see src/weather/api/auth.py).
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/v1/weather/health || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 15s

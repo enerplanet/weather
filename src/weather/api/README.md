@@ -46,9 +46,11 @@ pre-flight-check a request without paying for the real query.
 there's no separate "does the archive exist" check here.
 
 `GET /v1/weather/health` → liveness only, `{"status": "ok"}`, no
-filesystem I/O. Nested under `/weather/`, not a bare `/v1/health` --
-other services reached through the same Orchestrator expose their own
-`/health` too.
+filesystem I/O. No `X-API-Key` required and not rate limited, so a
+container or orchestrator probe reaches it without a credential; it also
+answers `200` when `WEATHER_API_KEYS` is unset (the process is up either
+way). Nested under `/weather/`, not a bare `/v1/health` -- other services
+reached through the same Orchestrator expose their own `/health` too.
 
 `GET /v1/weather/providers` → per-provider list of years with a processed
 archive, derived from filenames already on disk. Deliberately does not
@@ -63,13 +65,15 @@ security review of "one typed query operation" is a much smaller ask than
 ## Auth (minimum viable, not sufficient on its own)
 
 Static API keys via `WEATHER_API_KEYS` (comma-separated), checked against
-the `X-API-Key` header. A per-key in-memory rate limiter
-(`WEATHER_API_RATE_LIMIT`, default 60 req/min) guards against the "many
-small point queries reconstruct the bulk archive" risk. Every request is
-audit-logged (key prefix, path, status, remote address).
+the `X-API-Key` header on every route except `GET /v1/weather/health`. A
+per-key in-memory rate limiter (`WEATHER_API_RATE_LIMIT`, default 60
+req/min) guards against the "many small point queries reconstruct the
+bulk archive" risk. Every request is audit-logged (key prefix, path,
+status, remote address).
 
-Every response carries `RateLimit-Limit`/`RateLimit-Remaining`/
-`RateLimit-Reset`; a `429` also carries `Retry-After`.
+Every response except health carries `RateLimit-Limit`/
+`RateLimit-Remaining`/`RateLimit-Reset`; a `429` also carries
+`Retry-After`.
 
 This is not a substitute for network-level restrictions — real deployment
 should still pair this with a firewall/IP allowlist scoped to buem's known

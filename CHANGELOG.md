@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `GET /v1/weather/health` no longer requires an `X-API-Key` and is not
+  rate limited. A container or orchestrator liveness probe can now reach
+  it without a credential, and it answers `200` even when
+  `WEATHER_API_KEYS` is unset (a misconfigured server is still a running
+  process). The endpoint does no I/O and returns a constant, so there is
+  nothing to gate. Callers that were sending a key to it can stop; an
+  invalid key sent to health now gets `200` instead of `401`. Every other
+  route is unchanged.
+
 ## [2.0.0] - 2026-08-26
 
 ### Changed
