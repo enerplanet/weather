@@ -360,3 +360,93 @@ class TestGetPointWeatherCosmo:
         )
         assert list(df.columns) == ["WS_10M", "U_10M", "V_10M"]
         assert not df.isna().any().any()
+
+    def test_cosmo_point_far_from_archive_grid_raises(self, tmp_path, hourly_times) -> None:
+        """Regression check: a bbox match is not proof of grid coverage.
+
+        A country-scoped archive can be cropped far smaller than the
+        country bounding box used to route to it (e.g. a Bremen-only
+        crop stored as "germany"). Querying a point genuinely outside
+        the archive's grid must fail loudly instead of silently
+        returning the nearest cell however far away it actually is.
+        """
+        shape = (len(hourly_times), 2, 2)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(2),
+                "x": np.arange(2),
+                "latitude": (("y", "x"), np.array([[53.0, 53.1], [53.05, 53.15]])),
+                "longitude": (("y", "x"), np.array([[8.6, 8.7], [8.65, 8.75]])),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+
+        with pytest.raises(RuntimeError, match="no grid cell near"):
+            get_point_weather(
+                52.1, 6.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+            )
+
+
+class TestResolveCountryDir:
+    """`_resolve_country_dir` picks the nearest-covering country archive,
+    not the first bounding-box match in dict order."""
+
+    def _write_annual_archive(
+        self, out_dir, hourly_times, *, temperature: float, lat_2d, lon_2d
+    ) -> None:
+        shape = (len(hourly_times), *lat_2d.shape)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), temperature + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(lat_2d.shape[0]),
+                "x": np.arange(lat_2d.shape[1]),
+                "latitude": (("y", "x"), lat_2d),
+                "longitude": (("y", "x"), lon_2d),
+            },
+        )
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+
+    def test_prefers_nearer_country_over_first_bbox_match(
+        self, tmp_path, hourly_times, monkeypatch
+    ) -> None:
+        """Netherlands and Germany's bounding boxes both cover a point
+        near the Dutch-German border (e.g. Loenen, NL at ~52.1N/6.05E).
+        Dict iteration order alone would pick "germany" (it sorts first
+        in geo/countries.json); this must pick "netherlands" instead,
+        since its archive grid is the one that actually reaches the
+        point."""
+        import weather.point_query as point_query_module
+
+        monkeypatch.setattr(point_query_module, "data_root", lambda: tmp_path)
+
+        self._write_annual_archive(
+            tmp_path / "cosmo_rea6" / "netherlands" / "output",
+            hourly_times,
+            temperature=15.0,
+            lat_2d=np.array([[52.0, 52.1], [52.05, 52.15]]),
+            lon_2d=np.array([[6.0, 6.1], [6.05, 6.15]]),
+        )
+        self._write_annual_archive(
+            tmp_path / "cosmo_rea6" / "germany" / "output",
+            hourly_times,
+            temperature=99.0,
+            lat_2d=np.array([[53.0, 53.1], [53.05, 53.15]]),
+            lon_2d=np.array([[8.6, 8.7], [8.65, 8.75]]),
+        )
+
+        df = get_point_weather(
+            52.1, 6.05, 2018, provider="cosmo-rea6", use_case="solar"
+        )
+        assert (df["T"] == 15.0).all()

@@ -35,7 +35,7 @@ import pandas as pd
 from . import errors
 from .common.dni_reconstruction import reconstruct_dni_dhi
 from .common.env import data_root
-from .common.geo_lookup import find_nearest_cell
+from .common.geo_lookup import find_nearest_cell, haversine_km
 from .errors import WeatherAPIError
 from .variables import resolve_variables
 
@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 
 _SOLAR_DERIVED = ("GHI", "DHI", "DNI")
 _WIND_VARS = ("WS_10M", "U_10M", "V_10M")
+
+# COSMO-REA6's native grid spacing is ~6 km, so a genuinely covered point
+# is never more than a few km from its nearest cell. A country-scoped
+# archive can be cropped much smaller than the country bounding box used
+# to route to it (e.g. a Bremen-only crop stored under a "germany"
+# archive dir), so a bbox match alone doesn't guarantee grid coverage.
+_MAX_CELL_DISTANCE_KM = 20.0
 
 _ALIASES: dict[str, str] = {
     "cosmo": "cosmo-rea6",
@@ -102,21 +109,30 @@ def _resolve_country_dir(
 
     Country bounding boxes are simple rectangles (see
     ``geo.countries.COUNTRIES``), so two neighbouring countries can
-    overlap near a shared border; the first match (dict iteration order)
-    wins. Fine for a handful of countries -- revisit with a proper
-    nearest-centroid tiebreak if this list grows large enough for
-    overlaps to matter often.
+    overlap near a shared border (e.g. Germany's box also covers eastern
+    Netherlands). Among every country whose box contains the point and
+    that has an archive for *year*, this returns the one whose box
+    centre is nearest -- not the first dict-iteration match, which could
+    pick a country whose archive grid does not actually reach the point.
+    ``_get_point_cosmo_rea6`` still rejects the result if the archive's
+    nearest grid cell is implausibly far away, as a backstop.
     """
     from .geo.countries import COUNTRIES
 
     provider_root = data_root() / _OUTPUT_SUBDIR[canonical]
+    best: tuple[float, Path] | None = None
     for country, bbox in COUNTRIES.items():
         if not (bbox.south <= latitude <= bbox.north and bbox.west <= longitude <= bbox.east):
             continue
         candidate = provider_root / country / "output"
-        if candidate.is_dir() and any(candidate.glob(f"*{year}*")):
-            return candidate
-    return None
+        if not (candidate.is_dir() and any(candidate.glob(f"*{year}*"))):
+            continue
+        center_lat = (bbox.south + bbox.north) / 2
+        center_lon = (bbox.west + bbox.east) / 2
+        dist2 = (center_lat - latitude) ** 2 + (center_lon - longitude) ** 2
+        if best is None or dist2 < best[0]:
+            best = (dist2, candidate)
+    return best[1] if best else None
 
 
 def _finalize(df: pd.DataFrame, variables: tuple[str, ...]) -> pd.DataFrame:
@@ -419,6 +435,22 @@ def _get_point_cosmo_rea6(
     iy, ix = find_nearest_cell(ref, latitude, longitude)
     cell_lat = float(ref["latitude"].isel(y=iy, x=ix))
     cell_lon = float(ref["longitude"].isel(y=iy, x=ix))
+    distance_km = haversine_km(latitude, longitude, cell_lat, cell_lon)
+    if distance_km > _MAX_CELL_DISTANCE_KM:
+        for d in datasets:
+            d.close()
+        # RuntimeError, not WeatherAPIError: the view maps RuntimeError
+        # from this function to 422 (archive present, can't serve this
+        # request, retrying won't help -- same class as the missing-
+        # months case above). WeatherAPIError from this call path is
+        # caught upstream as a blanket 400, which is wrong for an
+        # archive-coverage problem.
+        raise RuntimeError(
+            f"Archive under {out_dir} has no grid cell near "
+            f"({latitude}, {longitude}); nearest cell is "
+            f"{distance_km:.1f} km away (max {_MAX_CELL_DISTANCE_KM} km). "
+            "This archive's grid does not cover this location."
+        )
 
     need_solar = any(v in _SOLAR_DERIVED for v in variables)
     need_t = "T" in variables

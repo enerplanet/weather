@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- COSMO-REA6 point lookups against a country-scoped archive could
+  silently resolve to the wrong country: `_resolve_country_dir` took the
+  first bounding-box match in dict order, so a point near a shared
+  border (e.g. a Dutch point also inside Germany's box) could resolve to
+  a neighbouring country's archive instead of its own. It now picks the
+  candidate whose bounding-box centre is nearest. As a backstop for the
+  general case -- a country-scoped archive can be cropped far smaller
+  than the bounding box used to route to it -- a COSMO point query now
+  fails loudly (`422`, `archive_not_servable`) rather than returning the
+  nearest cell when that cell is implausibly far (>20 km) from the
+  requested point.
+
 ### Changed
 
 - **Breaking**: `GET /v1/weather/point` returns `422` with error code
