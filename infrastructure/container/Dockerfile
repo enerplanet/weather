@@ -66,8 +66,13 @@ LABEL org.opencontainers.image.source="https://github.com/enerplanet/weather"
 LABEL org.opencontainers.image.description="COSMO-REA6 weather pipeline — UU-BUEM"
 LABEL org.opencontainers.image.licenses="MIT"
 
+# curl is deliberately absent. bullseye-security advertises a curl and
+# libcurl4 its pool does not serve, so installing it fails the build outright,
+# and the base image already ships wget. download.sh and decompress.sh prefer
+# curl and fall back to wget, so wget is simply the path taken now; the
+# healthcheck used wget already.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends lbzip2 pbzip2 curl \
+    && apt-get install -y --no-install-recommends lbzip2 pbzip2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the pre-built conda environment from builder

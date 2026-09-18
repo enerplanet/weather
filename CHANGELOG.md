@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.2] - 2026-09-18
+
+### Fixed
+
+- The image could not be built at all. `bullseye-security` advertises a
+  `curl` and `libcurl4` that its pool does not serve, so
+  `apt-get install curl` failed with a 404 and took the whole build with
+  it. curl is no longer installed: the base image already ships wget,
+  `download.sh` and `decompress.sh` prefer curl and fall back to wget, and
+  the healthcheck used wget already, so nothing loses a capability.
+
+  2.0.1 carries the same defect, which is why it has no published image.
+
 ## [2.0.1] - 2026-09-18
 
 ### Added
