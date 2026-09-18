@@ -53,7 +53,7 @@ services:
     build:
       context: ../..
       dockerfile: infrastructure/container/Dockerfile
-    image: weather-cosmo-rea6:${WEATHER_VERSION:-latest}
+    image: ${WEATHER_IMAGE:-ghcr.io/enerplanet/weather:latest}
     environment:
       PYTHONPATH: /app/src
       HDF5_USE_FILE_LOCKING: "FALSE"
@@ -67,6 +67,8 @@ services:
       - path: ../../.env
         required: false
     volumes:
+      # The image carries src/ already. This mount shadows it so a developer
+      # sees edits without rebuilding; drop it to run exactly what shipped.
       - ../../src:/app/src:ro
       - ${WEATHER_DATA_DIR_HOST:-../../data}:/data:ro
     ports:

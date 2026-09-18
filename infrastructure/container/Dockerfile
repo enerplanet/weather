@@ -87,7 +87,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENV PATH=/opt/conda/envs/weather_env/bin:$PATH
 ENV CONDA_DEFAULT_ENV=weather_env
 
-# Source code is bind-mounted at /app/src at runtime
+# The application itself. Copied rather than bind-mounted so the published
+# image runs on its own; a developer can still shadow it with a mount over the
+# same path. Last of the copies because it changes most often.
+COPY src/ /app/src/
 ENV PYTHONPATH=/app/src
 
 # Pipeline defaults (overridden by -e or docker-compose environment:)
