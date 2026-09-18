@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.0.1] - 2026-09-18
+
+### Added
+
+- `.dockerignore`. The build context is the repository root and the
+  reanalysis archive lives there, so a local build sent hundreds of
+  gigabytes of NetCDF to the Docker daemon and never finished. That is why
+  the missing source below was never caught locally; CI cannot catch it
+  either, because a fresh checkout has no archive at all.
 
 ### Fixed
+
+- The published container image carried no application code. It copied the
+  conda environment and the entrypoint, set `PYTHONPATH` to `/app/src` and
+  left that path to a bind mount, so the image ran only where the
+  repository was already checked out beside it; started on its own it
+  raised `ModuleNotFoundError: No module named 'weather'`. `src/` is now
+  copied into the image, and the serve compose file, which pointed at a
+  locally built image name no workflow produces, now defaults to the
+  published image.
 
 - COSMO-REA6 point lookups against a country-scoped archive could
   silently resolve to the wrong country: `_resolve_country_dir` took the
