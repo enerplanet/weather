@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `docker-compose.serve.yml` attaches `weather-serve` to the shared
+  `tentacron-net` network, which it creates if absent. Callers on that
+  network reach the API as `weather-serve:8080`.
+- The serve compose file reads the host port from `HOST_PORT`, falling
+  back to `WEATHER_API_PORT` and then 8090, so existing `.env` files keep
+  working.
+
 ## [2.0.2] - 2026-09-18
 
 ### Fixed
