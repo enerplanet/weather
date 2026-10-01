@@ -135,6 +135,25 @@ def _resolve_country_dir(
     return best[1] if best else None
 
 
+def _require_full_year(
+    paths: list[Path], year: int, canonical: str, out_dir: Path, hint: str = ""
+) -> None:
+    """Raise ``RuntimeError`` unless *paths* (monthly
+    ``<PREFIX>_<YYYY>_<MM>_all_attrs.nc`` files) cover all twelve months.
+
+    A year request must never be answered with a handful of months.
+    """
+    found = {p.name.removesuffix("_all_attrs.nc")[-2:] for p in paths}
+    missing = [f"{m:02d}" for m in range(1, 13) if f"{m:02d}" not in found]
+    if missing:
+        raise RuntimeError(
+            f"{canonical} archive for {year} under {out_dir} only has "
+            f"month(s) {sorted(found)} processed; missing {missing}. {hint}"
+            f"Run the pipeline for the missing months (weather run "
+            f"--provider {canonical} --year {year})."
+        )
+
+
 def _finalize(df: pd.DataFrame, variables: tuple[str, ...]) -> pd.DataFrame:
     """Normalize the index to tz-naive and select exactly *variables*, in
     the order requested."""
@@ -262,6 +281,7 @@ def _get_point_regular_grid(
             "first (weather run --provider "
             f"{canonical} --year {year})."
         )
+    _require_full_year(paths, year, canonical, out_dir)
 
     need_solar = any(v in _SOLAR_DERIVED for v in variables)
     need_t = "T" in variables
@@ -393,19 +413,15 @@ def _get_point_cosmo_rea6(
         # never silently get back a handful of months with a 200 -- fail
         # loudly instead, the same way an unrepaired ERA5-Land boundary
         # month does below.
-        found_months = {p.name.removeprefix(f"COSMO_REA6_{year}_")[:2] for p in paths}
-        missing_months = sorted(f"{m:02d}" for m in range(1, 13) if f"{m:02d}" not in found_months)
-        if missing_months:
-            raise RuntimeError(
-                f"cosmo-rea6 archive for {year} under {out_dir} only has "
-                f"month(s) {sorted(found_months)} processed; missing "
-                f"{missing_months}. ({latitude}, {longitude}) falls outside "
-                "every country-scoped archive (see COUNTRIES in "
+        _require_full_year(
+            paths, year, "cosmo-rea6", out_dir,
+            hint=(
+                f"({latitude}, {longitude}) falls outside every "
+                "country-scoped archive (see COUNTRIES in "
                 "weather.geo.countries), so it fell back to this flat, "
-                "partial archive. Run the pipeline for the missing months, "
-                "or query a location inside a country-scoped archive with "
-                "full-year coverage."
-            )
+                "partial archive. "
+            ),
+        )
         # Open each monthly file independently rather than
         # xr.open_mfdataset(..., combine="by_coords"): a real COSMO
         # archive can straddle the lat/lon-retention fix (some months

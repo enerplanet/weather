@@ -123,43 +123,67 @@ class TestGetPointWeatherRegularGrid:
     """ERA5-Land/MERRA-2-shaped archives: y/x dims, 1-D lat/lon aux coords."""
 
     def _write_archive(
-        self, tmp_path, subdir, filename, hourly_times, pressure_var, with_wind=False
+        self, tmp_path, subdir, filename, hourly_times, pressure_var, with_wind=False,
+        months=range(1, 13),
     ):
+        """Write one file per month in *months*; *filename* takes a
+        ``{month:02d}`` field. Each month holds ``len(hourly_times)``
+        hours from its first day."""
         lat_vals = np.array([50.0, 50.1, 50.2])
         lon_vals = np.array([4.0, 4.1, 4.2])
-        shape = (len(hourly_times), 3, 3)
-        ghi = _synthetic_ghi(hourly_times, shape)
-        t = 15 + np.zeros(shape)
-        pres = 101000 + np.zeros(shape)
-
-        data_vars = {
-            "GHI": (("time", "y", "x"), ghi),
-            "T": (("time", "y", "x"), t),
-            pressure_var: (("time", "y", "x"), pres),
-        }
-        if with_wind:
-            data_vars["U_10M"] = (("time", "y", "x"), 3.0 + np.zeros(shape))
-            data_vars["V_10M"] = (("time", "y", "x"), 2.0 + np.zeros(shape))
-            data_vars["WS_10M"] = (("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape))
-
-        ds = xr.Dataset(
-            data_vars,
-            coords={
-                "time": hourly_times,
-                "y": np.arange(3),
-                "x": np.arange(3),
-                "latitude": ("y", lat_vals),
-                "longitude": ("x", lon_vals),
-            },
-        )
         out_dir = tmp_path / subdir / "output"
         out_dir.mkdir(parents=True)
-        ds.to_netcdf(out_dir / filename)
+        for month in months:
+            times = pd.date_range(
+                f"2018-{month:02d}-01", periods=len(hourly_times), freq="h"
+            )
+            shape = (len(times), 3, 3)
+            data_vars = {
+                "GHI": (("time", "y", "x"), _synthetic_ghi(times, shape)),
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                pressure_var: (("time", "y", "x"), 101000 + np.zeros(shape)),
+            }
+            if with_wind:
+                data_vars["U_10M"] = (("time", "y", "x"), 3.0 + np.zeros(shape))
+                data_vars["V_10M"] = (("time", "y", "x"), 2.0 + np.zeros(shape))
+                data_vars["WS_10M"] = (
+                    ("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape)
+                )
+            ds = xr.Dataset(
+                data_vars,
+                coords={
+                    "time": times,
+                    "y": np.arange(3),
+                    "x": np.arange(3),
+                    "latitude": ("y", lat_vals),
+                    "longitude": ("x", lon_vals),
+                },
+            )
+            ds.to_netcdf(out_dir / filename.format(month=month))
         return out_dir
+
+    @pytest.mark.parametrize(
+        ("provider", "subdir", "filename", "pressure_var"),
+        [
+            ("era5-land", "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", "sp"),
+            ("merra-2", "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", "PS"),
+        ],
+    )
+    def test_partial_year_raises(
+        self, tmp_path, hourly_times, provider, subdir, filename, pressure_var
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, subdir, filename, hourly_times, pressure_var,
+            months=[m for m in range(1, 13) if m != 3],
+        )
+        with pytest.raises(RuntimeError, match=r"missing \['03'\]"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider=provider, data_dir=out_dir, use_case="solar"
+            )
 
     def test_era5_land_point_query(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
-            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times, "sp"
+            tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times, "sp"
         )
         df = get_point_weather(
             50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="solar"
@@ -170,7 +194,7 @@ class TestGetPointWeatherRegularGrid:
 
     def test_merra2_point_query(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
-            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times, "PS"
+            tmp_path, "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", hourly_times, "PS"
         )
         df = get_point_weather(
             50.05, 4.05, 2018, provider="merra2", data_dir=out_dir, use_case="solar"
@@ -192,7 +216,7 @@ class TestGetPointWeatherRegularGrid:
 
     def test_wind_use_case(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
-            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times,
+            tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times,
             "sp", with_wind=True,
         )
         df = get_point_weather(
@@ -203,7 +227,7 @@ class TestGetPointWeatherRegularGrid:
 
     def test_variables_subset_and_order(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
-            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times,
+            tmp_path, "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", hourly_times,
             "PS", with_wind=True,
         )
         df = get_point_weather(
@@ -217,7 +241,7 @@ class TestGetPointWeatherRegularGrid:
         self, tmp_path, hourly_times
     ) -> None:
         out_dir = self._write_archive(
-            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times,
+            tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times,
             "sp", with_wind=False,
         )
         with pytest.raises(KeyError, match="WS_10M"):
@@ -227,7 +251,7 @@ class TestGetPointWeatherRegularGrid:
 
     def test_both_variables_and_use_case_raises(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
-            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times, "sp"
+            tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times, "sp"
         )
         with pytest.raises(ValueError, match="at most one"):
             get_point_weather(

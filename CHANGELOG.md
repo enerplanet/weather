@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- `get_point_weather()` and `GET /v1/weather/point` returned a partial
+  year with no error for ERA5-Land and MERRA-2 when the archive held only
+  some of the year's monthly files (for example July only). Both now
+  refuse the request (`RuntimeError`, HTTP 422 `archive_not_servable`)
+  and name the missing months, as COSMO-REA6 already did.
+
 ## [2.1.0] - 2026-09-29
 
 ### Added
