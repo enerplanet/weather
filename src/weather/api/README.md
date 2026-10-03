@@ -1,7 +1,7 @@
 # Point-query HTTP API
 
-**Status: deployed on `sd26` as of 2026-08-13 (not wired into this repo's
-CI). See "Deployment (sd26)" below for the real, currently-running setup.**
+**Status: deployed via Docker (`infrastructure/container/docker-compose.serve.yml`,
+`weather` namespace). Not wired into this repo's own CI/packaging defaults.**
 
 ## Why this exists
 
@@ -17,11 +17,44 @@ while callers outside it never need filesystem or bulk access.
 `GET /v1/weather/point?provider=merra-2&lat=52.0&lon=5.0&year=2018`
 → `weather.get_point_weather(latitude, longitude, year, provider=provider)`,
 returned as a parquet-encoded body (`application/octet-stream`; the reset
-index column is first, then `T`/`GHI`/`DHI`/`DNI`).
+index column is first, then one column per resolved variable, in order).
 
-`GET /v1/health` → per-provider list of years with a processed archive,
-derived from filenames already on disk. Deliberately does not expose a raw
-directory listing.
+Add `&format=json` to get the same data as a JSON body instead
+(`{"index": [...], "variables": {"T": [...], ...}}`, `index` an array of
+`Z`-suffixed RFC3339 UTC timestamps, `variables` keyed by resolved
+variable name) — for a caller that doesn't want a parquet-parsing
+dependency just to consume this endpoint. `NaN` values serialize as
+JSON `null`.
+
+Exactly one of `&use_case=` / `&variables=` is required -- no default,
+so a caller that forgets to say what it needs gets a 400, not a silent
+guess. `use_case=solar` (`T`/`GHI`/`DHI`/`DNI`) or `use_case=wind`
+(`WS_10M`/`U_10M`/`V_10M`) are the named shortcuts; `variables=T,WS_10M`
+names exact variables directly (see `weather.variables` for the full
+registry). `GET /v1/weather/variables` lists every variable's name/
+unit/description and every `use_case`'s members, so a caller doesn't
+need to already know the meteorological variable names.
+
+`GET /v1/weather/validate?provider=...&lat=...&lon=...&year=...&use_case=...`
+→ same parameters as `/v1/weather/point`, structural validation only
+(parameters present/numeric/in-range, provider/variable/use_case names
+recognized) -- no archive access. `{"valid": true, "resolved": {"provider":
+"era5-land", "variables": [...]}}` on success, the same `{"error": ...}`
+shape as every other endpoint otherwise. Lets a caller (the Orchestrator)
+pre-flight-check a request without paying for the real query.
+`/v1/weather/point`'s own 404 already fails before opening any file, so
+there's no separate "does the archive exist" check here.
+
+`GET /v1/weather/health` → liveness only, `{"status": "ok"}`, no
+filesystem I/O. No `X-API-Key` required and not rate limited, so a
+container or orchestrator probe reaches it without a credential; it also
+answers `200` when `WEATHER_API_KEYS` is unset (the process is up either
+way). Nested under `/weather/`, not a bare `/v1/health` -- other services
+reached through the same Orchestrator expose their own `/health` too.
+
+`GET /v1/weather/providers` → per-provider list of years with a processed
+archive, derived from filenames already on disk. Deliberately does not
+expose a raw directory listing.
 
 Deliberately **not** exposed: file listing, bulk/archive download, anything
 beyond this single point query already at the heart of `weather`'s own
@@ -32,10 +65,15 @@ security review of "one typed query operation" is a much smaller ask than
 ## Auth (minimum viable, not sufficient on its own)
 
 Static API keys via `WEATHER_API_KEYS` (comma-separated), checked against
-the `X-API-Key` header. A per-key in-memory rate limiter
-(`WEATHER_API_RATE_LIMIT`, default 60 req/min) guards against the "many
-small point queries reconstruct the bulk archive" risk. Every request is
-audit-logged (key prefix, path, status, remote address).
+the `X-API-Key` header on every route except `GET /v1/weather/health`. A
+per-key in-memory rate limiter (`WEATHER_API_RATE_LIMIT`, default 60
+req/min) guards against the "many small point queries reconstruct the
+bulk archive" risk. Every request is audit-logged (key prefix, path,
+status, remote address).
+
+Every response except health carries `RateLimit-Limit`/
+`RateLimit-Remaining`/`RateLimit-Reset`; a `429` also carries
+`Retry-After`.
 
 This is not a substitute for network-level restrictions — real deployment
 should still pair this with a firewall/IP allowlist scoped to buem's known
@@ -46,6 +84,8 @@ deployment (would need a shared store, e.g. redis, at that point).
 
 ## Running it locally
 
+Local dev server:
+
 ```bash
 pip install -e ".[api,pointquery,solar,parquet]"
 export WEATHER_API_KEYS="dev-key-change-me"
@@ -53,71 +93,41 @@ weather serve --host 127.0.0.1 --port 8080
 ```
 
 `weather serve` runs Flask's dev server — fine for local testing, **not**
-for production (no concurrency, no TLS). A real deployment should run this
-app under gunicorn/similar, same as buem's own `infrastructure/container/`
-does for its API.
+for production (no concurrency, no TLS).
 
-## Deployment (`sd26`)
-
-Running via `scripts/launch_weather_serve.sh` (repo root), bound to
-`0.0.0.0:8091`, pointed at the real `/data/soma` archives:
+Docker (gunicorn, matches buem's own `infrastructure/container/` shape for
+its API):
 
 ```bash
-ssh sd26
-cd ~/weather
-
-# Check it's running
-ps -p "$(cat logs/weather_serve.pid)" 2>/dev/null && echo running
-
-# Stop it
-kill "$(cat logs/weather_serve.pid)"
-
-# Start/restart (reads WEATHER_API_KEYS from .env -- see that script's
-# header for how to generate one; refuses to start if .env has none, and
-# refuses to double-start if the PID file shows an already-running process)
-bash scripts/launch_weather_serve.sh
+export WEATHER_API_KEYS="dev-key-change-me"   # in .env, or shell export
+docker compose -f infrastructure/container/docker-compose.serve.yml \
+    up -d --build
 ```
 
-PID and log files live under `logs/` (gitignored, not `/tmp` — survives a
-`/tmp` cleanup, though not a full server reboot without re-running the
-script).
+Runs in its own `weather` Compose namespace, deliberately not joined to
+any one consumer's namespace (e.g. `building-simulation`) — this service
+has more than one downstream consumer in mind (BuEM today, PV/wind
+named as future ones). A consumer in a different Compose project reaches
+it via its published host port (`WEATHER_API_PORT`, default 8090) — see
+the compose file's own header comment for the `host.docker.internal`
+pattern.
 
-**Firewall**: port 8091 is not reachable directly from outside `sd26`, even
-over the university VPN (confirmed: TCP connect times out) — only SSH
-(port 22) is open. Every caller, including a developer's own machine,
-currently needs an SSH tunnel:
+## Consumer integration
 
-```bash
-ssh -N -L 8091:localhost:8091 sd26
-```
-
-Each client environment needs its own tunnel (Windows, WSL2, etc. don't
-share a loopback interface) — see the main repo README's troubleshooting
-history for this if a tunnel silently isn't forwarding. A real production
-deployment (e.g. buem's own hosting) would need either a firewall rule
-opening 8091 for its specific egress IP, or a reverse proxy on a port
-that's already open — an infrastructure decision, not resolved here.
-
-## buem-side integration
-
-`buem`'s `weather_cache.py::get_or_fetch_weather()` has a matching remote
-branch, gated by `WEATHER_API_URL`/`WEATHER_API_KEY`. Unset (the default),
-buem's behavior is entirely unchanged (local `data_dir`/archive path,
-exactly as before this API existed). Verified end-to-end (2026-08-13):
-`get_or_fetch_weather()` unmodified, through the SSH tunnel above, against
-two independent (location, year) pairs guaranteed not already
-locally-cached — both returned correct 8760-hour years with physically
-sane values.
+Per `decisions/2026-08-07-buem-weather-access-architecture.md` (private
+vault, not in this repo): **no service calls this API directly.** The
+only sanctioned caller is a future Orchestrator, which resolves weather
+and hands it to BuEM (and other model services) as part of the request
+it already builds — BuEM's own `/api/process` accepts a pre-resolved
+`buem.weather` block for exactly this (see `enerplanet/buem#10`). Neither
+`buem-gateway` nor BuEM itself fetches from this API — confirmed
+directly by the Orchestrator's own developer, not inferred.
 
 ## Still open (not decided here)
 
-- Verified so far: `/v1/health` returns correct real data for all three
-  providers; `/v1/weather/point` verified for `merra-2` only (two real
-  fetches via buem, see above). `cosmo-rea6`/`era5-land` point-query is
-  wired identically (same provider-agnostic `get_point_weather` call) but
-  not yet exercised against their real archives through this API
-  specifically.
-- Whether buem's actual production deployment (as opposed to a
-  developer's tunneled machine) can reach this at all depends on the
-  firewall question above — needs the IT conversation flagged in buem's
-  CLAUDE.md, not a code change.
+- Where this actually runs relative to the data host and how the
+  Orchestrator's production egress reaches it — needs the IT conversation
+  flagged in buem's CLAUDE.md, not a code change.
+- The Orchestrator itself doesn't exist in code yet, so nothing calls this
+  API in production today — this is architectural placement, not a
+  working integration.

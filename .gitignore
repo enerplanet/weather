@@ -62,6 +62,9 @@ htmlcov/
 *.whl
 *.conda
 
+# MkDocs build output
+/site
+
 # IDE
 .vscode/*
 !.vscode/settings.json

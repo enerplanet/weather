@@ -1,0 +1,81 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# weather serve — Docker Compose (standalone service, own namespace)
+# ──────────────────────────────────────────────────────────────────────────────
+# Runs weather serve's point-query HTTP API as a long-running service in its
+# own `weather` project namespace. The container also joins tentacron-net,
+# the shared network the heat services use, so a caller on that network
+# reaches it as `weather-serve:8080`. From the host, use
+# `localhost:${HOST_PORT}`.
+#
+# Reuses the same image as the data-pipeline compose file
+# (docker-compose.yml, weather-cosmo-rea6) -- the only difference is
+# PIPELINE_MODE=serve, routed by entrypoint.sh. No separate Dockerfile.
+#
+# ── Build & run ────────────────────────────────────────────────────────────
+#   docker compose -f infrastructure/container/docker-compose.serve.yml \
+#       up -d --build
+#
+# ── Logs / status ───────────────────────────────────────────────────────────
+#   docker compose -f infrastructure/container/docker-compose.serve.yml logs -f
+#
+# Environment variables (set in .env at repo root, or shell export):
+#   WEATHER_API_KEYS       Comma-separated API keys (required, no default --
+#                          see src/weather/api/README.md)
+#   WEATHER_API_RATE_LIMIT Requests/min per key       (default: 60)
+#   WEATHER_API_CACHE_SIZE Cached (provider,lat,lon,year) entries (default: 256)
+#   WEATHER_DATA_DIR_HOST  Host path for the data root (default: ../../data --
+#                          the parent of merra2/era5_land/cosmo_rea6, NOT
+#                          the pipeline compose file's own COSMO-specific
+#                          default of ../../data/cosmo_rea6). Deliberately
+#                          not named WEATHER_DATA_DIR -- .env already sets
+#                          that for direct (non-Docker) CLI use, resolved
+#                          relative to the repo root, not this file.
+#   HOST_PORT              Host port to expose          (default: 8090)
+#   WEATHER_API_PORT       Fallback for HOST_PORT, kept for existing .env files
+# ──────────────────────────────────────────────────────────────────────────────
+name: weather
+
+services:
+  weather-serve:
+    container_name: weather-serve
+    build:
+      context: ../..
+      dockerfile: infrastructure/container/Dockerfile
+    image: ${WEATHER_IMAGE:-ghcr.io/enerplanet/weather:latest}
+    environment:
+      PYTHONPATH: /app/src
+      HDF5_USE_FILE_LOCKING: "FALSE"
+      PIPELINE_MODE: serve
+      WEATHER_DATA_DIR: /data
+      WEATHER_API_WORKERS: ${WEATHER_API_WORKERS:-2}
+      WEATHER_API_KEYS: ${WEATHER_API_KEYS:?set WEATHER_API_KEYS in .env}
+      WEATHER_API_RATE_LIMIT: ${WEATHER_API_RATE_LIMIT:-60}
+      WEATHER_API_CACHE_SIZE: ${WEATHER_API_CACHE_SIZE:-256}
+    env_file:
+      - path: ../../.env
+        required: false
+    volumes:
+      # The image carries src/ already. This mount shadows it so a developer
+      # sees edits without rebuilding; drop it to run exactly what shipped.
+      - ../../src:/app/src:ro
+      - ${WEATHER_DATA_DIR_HOST:-../../data}:/data:ro
+    ports:
+      - "${HOST_PORT:-${WEATHER_API_PORT:-8090}}:8080"
+    healthcheck:
+      # /v1/weather/health needs no API key (see src/weather/api/auth.py).
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/v1/weather/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - default
+      - tentacron-net
+    restart: unless-stopped
+
+# Declared with `name:` and no `external:` so the first stack up creates it.
+# The key must stay spelled as the name and carry no driver or ipam block:
+# every repository joining tentacron-net declares it identically.
+networks:
+  tentacron-net:
+    name: tentacron-net

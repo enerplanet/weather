@@ -1,0 +1,19 @@
+# The build needs three things: infrastructure/env/weather_env.yml,
+# infrastructure/container/entrypoint.sh and src/. Everything else is context
+# the daemon copies for nothing.
+
+# The reanalysis archive, hundreds of gigabytes of NetCDF. It is mounted at
+# runtime, never baked in. Without this line a local build sends the whole
+# archive to the daemon and never finishes; CI does not notice because a fresh
+# checkout has no data/ at all.
+data/
+
+.git/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+**/__pycache__/
+*.py[cod]
+fixtures/
+docs/

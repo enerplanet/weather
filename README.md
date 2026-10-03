@@ -15,6 +15,7 @@ Currently, this pipeline standardizes three weather databases:
 <!-- markdownlint-disable MD013 -->
 [![CI](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/ci.yml)
 [![Release](https://github.com/UU-BUEM/weather/actions/workflows/release.yml/badge.svg)](https://github.com/UU-BUEM/weather/actions/workflows/release.yml)
+[![MkDocs](https://github.com/enerplanet/weather/actions/workflows/docs.yml/badge.svg?branch=enerplanet)](https://enerplanet.github.io/weather)
 <!-- markdownlint-enable MD013 -->
 
 Standalone weather processing repository for `UU-BUEM`.
@@ -209,13 +210,23 @@ archive directly:
 ```python
 from weather import get_point_weather
 
-df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
+df = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="solar")
 # df: hourly DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
 ```
 
 Install just enough for this (no GRIB/download stack): `pip install
 weather[pointquery,solar]`. Requires a provider archive that's already
 been produced by a normal pipeline run for that `(provider, year)`.
+
+## HTTP API (`weather serve`)
+
+For a caller that can't import this package directly, `weather serve`
+exposes the same point query over HTTP.
+
+Interactive reference (Swagger UI, renders `docs/openapi/openapi.yaml`):
+https://enerplanet.github.io/weather/openapi/
+
+Full design, auth, and run instructions: `src/weather/api/README.md`.
 
 ## Country cropping (`weather geo`)
 

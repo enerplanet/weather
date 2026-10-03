@@ -40,8 +40,8 @@ def get_config() -> dict[str, Any]:
         "threads_per_job": EnvSettings.merra2_threads_per_job(),
         "conda_env": EnvSettings.merra2_conda_env(),
         "cleanup": EnvSettings.merra2_cleanup(),
-        # Geographic crop [N, W, S, E]; Europe by default (see
-        # EnvSettings.merra2_area).
+        # Geographic crop [N, W, S, E]; required, see
+        # EnvSettings.merra2_area.
         "area": EnvSettings.merra2_area(),
         # Region tag for the downloaded raw file's name (e.g. "NL"),
         # None for the default/untagged case -- see local_path().

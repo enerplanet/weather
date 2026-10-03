@@ -20,17 +20,28 @@ from ...settings import EnvSettings
 from .downloaded_attributes import ATTRIBUTES
 
 
-def _area_from_env() -> list[float] | None:
-    """Parse ``ERA5_AREA`` = "N,W,S,E" into a list, or None (= global).
+def _area_from_env() -> list[float]:
+    """Parse ``ERA5_AREA`` = "N,W,S,E" into a list.
 
-    CDS expects ``area = [North, West, South, East]`` in degrees.
-    Europe (matching the MERRA-2 footprint) is ``72,-11,34,32``.
-    Cropping shrinks each GRIB message ~24x versus global, which cuts
-    storage AND avoids eccodes memory-allocation failures.
+    CDS expects ``area = [North, West, South, East]`` in degrees. Falls
+    back to ``WEATHER_REGION``'s bbox (see
+    :meth:`EnvSettings.region_bbox`) when unset; with neither set,
+    raises rather than silently defaulting to a global download (which
+    is both far larger and hits eccodes memory-allocation failures on
+    large global fields). See docs/COUNTRY_SCOPED_ARCHIVES.md for
+    computing the box for a country set, or scoping to more than one
+    country -- WEATHER_REGION only covers a single country.
     """
     raw = os.getenv("ERA5_AREA", "").strip()
     if not raw:
-        return None
+        region_bbox = EnvSettings.region_bbox()
+        if region_bbox is not None:
+            return region_bbox.to_area_list()
+        raise ValueError(
+            "ERA5_AREA is required (format 'N,W,S,E'), or set "
+            "WEATHER_REGION to a single known country -- refusing to "
+            "default to a global download."
+        )
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     if len(parts) != 4:
         raise ValueError(
@@ -82,7 +93,7 @@ def get_config() -> dict[str, Any]:
         "cds_url": EnvSettings.era5_cds_url(),
         "cds_key": EnvSettings.era5_cds_key(),
 
-        # Geographic crop [N, W, S, E]; None = global.
+        # Geographic crop [N, W, S, E]; required, see _area_from_env.
         "area": _area_from_env(),
         # Region tag for the downloaded raw file's name (e.g. "NL"),
         # None for the default/untagged case -- see local_path().

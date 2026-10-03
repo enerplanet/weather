@@ -52,3 +52,13 @@ def find_nearest_cell(ds: Any, latitude: float, longitude: float) -> tuple[int, 
     dist2 = (lat_2d - latitude) ** 2 + (lon_2d - longitude) ** 2
     iy, ix = (int(v) for v in np.unravel_index(np.argmin(dist2), dist2.shape))
     return iy, ix
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two WGS84 points, in km."""
+    earth_radius_km = 6371.0
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dphi = np.radians(lat2 - lat1)
+    dlmb = np.radians(lon2 - lon1)
+    a = np.sin(dphi / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dlmb / 2) ** 2
+    return float(2 * earth_radius_km * np.arcsin(np.sqrt(a)))
