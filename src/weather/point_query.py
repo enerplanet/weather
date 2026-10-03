@@ -3,18 +3,25 @@
 This module does **not** download or process data itself — it only opens
 NetCDF files that a prior ``weather run --provider ... --year ...`` (or
 equivalent pipeline call) already produced, and extracts the nearest grid
-cell's ``T``/``GHI``/``DHI``/``DNI`` for one ``(latitude, longitude, year)``.
-This keeps it import-light: only ``numpy``/``pandas``/``xarray``/``netcdf4``
-(the ``pointquery`` extra) plus ``pvlib`` (the ``solar`` extra) for DNI/DHI
-reconstruction — never the GRIB/download/transform pipeline stack
-(``cfgrib``, ``dask``, ``eccodes``, ``pyproj`` — the ``pipeline`` extra).
+cell's requested variables for one ``(latitude, longitude, year)`` -- see
+``weather.variables`` for the full registry (solar: ``T``/``GHI``/
+``DHI``/``DNI``, wind: ``WS_10M``/``U_10M``/``V_10M``). *variables*/
+*use_case* has no default -- exactly one is required. This keeps it
+import-light: only ``numpy``/``pandas``/``xarray``/``netcdf4`` (the
+``pointquery`` extra) plus ``pvlib`` (the ``solar`` extra, only actually
+imported when GHI/DHI/DNI are requested) for DNI/DHI reconstruction —
+never the GRIB/download/transform pipeline stack (``cfgrib``, ``dask``,
+``eccodes``, ``pyproj`` — the ``pipeline`` extra).
 
 Typical usage::
 
     from weather import get_point_weather
 
-    df = get_point_weather(52.0, 5.0, 2018, provider="era5-land")
+    df = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="solar")
     # df: DatetimeIndex, columns T (degC), GHI/DHI/DNI (W/m2)
+
+    wind = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="wind")
+    # df: DatetimeIndex, columns WS_10M/U_10M/V_10M (m/s)
 """
 
 from __future__ import annotations
@@ -25,11 +32,24 @@ from typing import Any
 
 import pandas as pd
 
+from . import errors
 from .common.dni_reconstruction import reconstruct_dni_dhi
 from .common.env import data_root
-from .common.geo_lookup import find_nearest_cell
+from .common.geo_lookup import find_nearest_cell, haversine_km
+from .errors import WeatherAPIError
+from .variables import resolve_variables
 
 logger = logging.getLogger(__name__)
+
+_SOLAR_DERIVED = ("GHI", "DHI", "DNI")
+_WIND_VARS = ("WS_10M", "U_10M", "V_10M")
+
+# COSMO-REA6's native grid spacing is ~6 km, so a genuinely covered point
+# is never more than a few km from its nearest cell. A country-scoped
+# archive can be cropped much smaller than the country bounding box used
+# to route to it (e.g. a Bremen-only crop stored under a "germany"
+# archive dir), so a bbox match alone doesn't guarantee grid coverage.
+_MAX_CELL_DISTANCE_KM = 20.0
 
 _ALIASES: dict[str, str] = {
     "cosmo": "cosmo-rea6",
@@ -45,9 +65,6 @@ _OUTPUT_SUBDIR: dict[str, str] = {
     "era5-land": "era5_land",
     "merra-2": "merra2",
 }
-
-_REQUIRED_COLUMNS = ("T", "GHI", "DHI", "DNI")
-
 
 def _import_xarray() -> Any:
     """Lazy-import xarray (the `pointquery` extra, not needed at import time)."""
@@ -76,14 +93,57 @@ def _output_dir(canonical: str, data_dir: Path | str | None) -> Path:
     return data_root() / _OUTPUT_SUBDIR[canonical] / "output"
 
 
-def _finalize(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize the index to tz-naive and select the canonical columns."""
+def _resolve_country_dir(
+    canonical: str, latitude: float, longitude: float, year: int
+) -> Path | None:
+    """Best-effort lookup of a country-scoped output directory for
+    *(latitude, longitude)*, following the ``<provider>/<country>/output``
+    layout (see ``docs/COUNTRY_SCOPED_ARCHIVES.md``).
+
+    Returns ``None`` -- meaning "fall through to the provider's flat
+    default directory" -- whenever nothing more specific is available:
+    no country's bounding box contains the point, or the matching
+    country has no archive for *year* yet. This is an optimization over
+    the default directory, never a requirement; every caller still gets
+    a normal (or FileNotFoundError) result either way.
+
+    Country bounding boxes are simple rectangles (see
+    ``geo.countries.COUNTRIES``), so two neighbouring countries can
+    overlap near a shared border (e.g. Germany's box also covers eastern
+    Netherlands). Among every country whose box contains the point and
+    that has an archive for *year*, this returns the one whose box
+    centre is nearest -- not the first dict-iteration match, which could
+    pick a country whose archive grid does not actually reach the point.
+    ``_get_point_cosmo_rea6`` still rejects the result if the archive's
+    nearest grid cell is implausibly far away, as a backstop.
+    """
+    from .geo.countries import COUNTRIES
+
+    provider_root = data_root() / _OUTPUT_SUBDIR[canonical]
+    best: tuple[float, Path] | None = None
+    for country, bbox in COUNTRIES.items():
+        if not (bbox.south <= latitude <= bbox.north and bbox.west <= longitude <= bbox.east):
+            continue
+        candidate = provider_root / country / "output"
+        if not (candidate.is_dir() and any(candidate.glob(f"*{year}*"))):
+            continue
+        center_lat = (bbox.south + bbox.north) / 2
+        center_lon = (bbox.west + bbox.east) / 2
+        dist2 = (center_lat - latitude) ** 2 + (center_lon - longitude) ** 2
+        if best is None or dist2 < best[0]:
+            best = (dist2, candidate)
+    return best[1] if best else None
+
+
+def _finalize(df: pd.DataFrame, variables: tuple[str, ...]) -> pd.DataFrame:
+    """Normalize the index to tz-naive and select exactly *variables*, in
+    the order requested."""
     idx = pd.DatetimeIndex(df.index)
     if idx.tz is not None:
         idx = idx.tz_convert(None)
     df = df.copy()
     df.index = idx
-    return df[list(_REQUIRED_COLUMNS)]
+    return df[list(variables)]
 
 
 def _strip_tz(series: pd.Series) -> pd.Series:
@@ -171,6 +231,7 @@ def _get_point_regular_grid(
     longitude: float,
     year: int,
     data_dir: Path | str | None,
+    variables: tuple[str, ...],
     *,
     canonical: str,
     filename_glob: str,
@@ -202,6 +263,10 @@ def _get_point_regular_grid(
             f"{canonical} --year {year})."
         )
 
+    need_solar = any(v in _SOLAR_DERIVED for v in variables)
+    need_t = "T" in variables
+    wind_vars = [v for v in variables if v in _WIND_VARS]
+
     unrepaired: list[str] = []
     preprocess = _regular_grid_preprocess(
         legacy_temperature_var, legacy_pressure_var, unrepaired
@@ -209,6 +274,7 @@ def _get_point_regular_grid(
     ghi_parts: list[pd.Series] = []
     t_parts: list[pd.Series] = []
     ps_parts: list[pd.Series] = []
+    wind_parts: dict[str, list[pd.Series]] = {v: [] for v in wind_vars}
     cell_lat, cell_lon = latitude, longitude
     for p in paths:
         with xr.open_dataset(str(p)) as raw:
@@ -222,14 +288,25 @@ def _get_point_regular_grid(
                     "with per-cell coordinates."
                 )
             cell = ds.sel(latitude=latitude, longitude=longitude, method="nearest")
-            ghi_parts.append(cell["GHI"].to_series())
-            t_parts.append(cell["T"].to_series())
-            if "PS" in cell:
-                ps_parts.append(cell["PS"].to_series())
+            if need_solar:
+                ghi_parts.append(cell["GHI"].to_series())
+                if "PS" in cell:
+                    ps_parts.append(cell["PS"].to_series())
+            if need_t:
+                t_parts.append(_temperature_series(cell, legacy_temperature_var))
+            for v in wind_vars:
+                if v not in cell:
+                    raise KeyError(
+                        f"{p.name} has no {v!r} variable; this archive "
+                        f"predates {canonical}'s wind-export convention. "
+                        "Re-run the pipeline's transform+export phase for "
+                        "this file to regenerate it with wind variables."
+                    )
+                wind_parts[v].append(cell[v].to_series())
             cell_lat = float(cell["latitude"])
             cell_lon = float(cell["longitude"])
 
-    if unrepaired:
+    if unrepaired and need_solar:
         raise RuntimeError(
             f"{canonical} archive has {len(unrepaired)} unrepaired month(s) "
             f"under {out_dir}: {sorted(unrepaired)}. Their first hourly "
@@ -241,26 +318,33 @@ def _get_point_regular_grid(
             "before using it for point queries."
         )
 
-    ghi = pd.concat(ghi_parts).sort_index()
-    t = pd.concat(t_parts).sort_index()
-    pressure = pd.concat(ps_parts).sort_index() if ps_parts else None
-    dni_dhi = reconstruct_dni_dhi(
-        ghi,
-        cell_lat,
-        cell_lon,
-        method="dirint",
-        pressure=pressure,
-    )
-    dni = _strip_tz(dni_dhi["DNI"])
-    dhi = _strip_tz(dni_dhi["DHI"])
-    return _finalize(pd.DataFrame({"T": t, "GHI": ghi, "DNI": dni, "DHI": dhi}))
+    columns: dict[str, pd.Series] = {}
+    if need_t:
+        columns["T"] = pd.concat(t_parts).sort_index()
+    if need_solar:
+        ghi = pd.concat(ghi_parts).sort_index()
+        columns["GHI"] = ghi
+        if "DNI" in variables or "DHI" in variables:
+            pressure = pd.concat(ps_parts).sort_index() if ps_parts else None
+            dni_dhi = reconstruct_dni_dhi(
+                ghi, cell_lat, cell_lon, method="dirint", pressure=pressure
+            )
+            if "DNI" in variables:
+                columns["DNI"] = _strip_tz(dni_dhi["DNI"])
+            if "DHI" in variables:
+                columns["DHI"] = _strip_tz(dni_dhi["DHI"])
+    for v in wind_vars:
+        columns[v] = pd.concat(wind_parts[v]).sort_index()
+
+    return _finalize(pd.DataFrame(columns), variables)
 
 
 def _get_point_era5_land(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None
+    latitude: float, longitude: float, year: int, data_dir: Path | str | None,
+    variables: tuple[str, ...],
 ) -> pd.DataFrame:
     return _get_point_regular_grid(
-        latitude, longitude, year, data_dir,
+        latitude, longitude, year, data_dir, variables,
         canonical="era5-land",
         filename_glob=f"ERA5_LAND_{year}_??_all_attrs.nc",
         legacy_pressure_var="sp",
@@ -269,10 +353,11 @@ def _get_point_era5_land(
 
 
 def _get_point_merra2(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None
+    latitude: float, longitude: float, year: int, data_dir: Path | str | None,
+    variables: tuple[str, ...],
 ) -> pd.DataFrame:
     return _get_point_regular_grid(
-        latitude, longitude, year, data_dir,
+        latitude, longitude, year, data_dir, variables,
         canonical="merra-2",
         filename_glob=f"MERRA2_{year}_??_all_attrs.nc",
         legacy_pressure_var="PS",
@@ -281,7 +366,8 @@ def _get_point_merra2(
 
 
 def _get_point_cosmo_rea6(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None
+    latitude: float, longitude: float, year: int, data_dir: Path | str | None,
+    variables: tuple[str, ...],
 ) -> pd.DataFrame:
     xr = _import_xarray()
     out_dir = _output_dir("cosmo-rea6", data_dir)
@@ -298,6 +384,27 @@ def _get_point_cosmo_rea6(
                 f"COSMO_REA6_{year}_??_all_attrs.nc). Run the pipeline for "
                 f"{year} first (weather run --provider cosmo-rea6 --year "
                 f"{year})."
+            )
+        # This is the flat, non-country-scoped fallback (no country's
+        # bounding box covers this point -- see _resolve_country_dir) and
+        # unlike a country-scoped archive it is not guaranteed to be a
+        # complete year: only whichever months the pipeline has been run
+        # for exist here. A caller asking for one year/location should
+        # never silently get back a handful of months with a 200 -- fail
+        # loudly instead, the same way an unrepaired ERA5-Land boundary
+        # month does below.
+        found_months = {p.name.removeprefix(f"COSMO_REA6_{year}_")[:2] for p in paths}
+        missing_months = sorted(f"{m:02d}" for m in range(1, 13) if f"{m:02d}" not in found_months)
+        if missing_months:
+            raise RuntimeError(
+                f"cosmo-rea6 archive for {year} under {out_dir} only has "
+                f"month(s) {sorted(found_months)} processed; missing "
+                f"{missing_months}. ({latitude}, {longitude}) falls outside "
+                "every country-scoped archive (see COUNTRIES in "
+                "weather.geo.countries), so it fell back to this flat, "
+                "partial archive. Run the pipeline for the missing months, "
+                "or query a location inside a country-scoped archive with "
+                "full-year coverage."
             )
         # Open each monthly file independently rather than
         # xr.open_mfdataset(..., combine="by_coords"): a real COSMO
@@ -328,10 +435,51 @@ def _get_point_cosmo_rea6(
     iy, ix = find_nearest_cell(ref, latitude, longitude)
     cell_lat = float(ref["latitude"].isel(y=iy, x=ix))
     cell_lon = float(ref["longitude"].isel(y=iy, x=ix))
+    distance_km = haversine_km(latitude, longitude, cell_lat, cell_lon)
+    if distance_km > _MAX_CELL_DISTANCE_KM:
+        for d in datasets:
+            d.close()
+        # RuntimeError, not WeatherAPIError: the view maps RuntimeError
+        # from this function to 422 (archive present, can't serve this
+        # request, retrying won't help -- same class as the missing-
+        # months case above). WeatherAPIError from this call path is
+        # caught upstream as a blanket 400, which is wrong for an
+        # archive-coverage problem.
+        raise RuntimeError(
+            f"Archive under {out_dir} has no grid cell near "
+            f"({latitude}, {longitude}); nearest cell is "
+            f"{distance_km:.1f} km away (max {_MAX_CELL_DISTANCE_KM} km). "
+            "This archive's grid does not cover this location."
+        )
+
+    need_solar = any(v in _SOLAR_DERIVED for v in variables)
+    need_t = "T" in variables
+    wind_vars = [v for v in variables if v in _WIND_VARS]
 
     cells = [d.isel(y=iy, x=ix) for d in datasets]
-    ghi = pd.concat([c["GHI"].to_series() for c in cells]).sort_index()
-    t = pd.concat([_temperature_series(c, "T_2M") for c in cells]).sort_index()
+    columns: dict[str, pd.Series] = {}
+    if need_t:
+        columns["T"] = pd.concat(
+            [_temperature_series(c, "T_2M") for c in cells]
+        ).sort_index()
+    ghi = None
+    if need_solar:
+        ghi = pd.concat([c["GHI"].to_series() for c in cells]).sort_index()
+        columns["GHI"] = ghi
+    for v in wind_vars:
+        for c in cells:
+            if v not in c:
+                for d in datasets:
+                    d.close()
+                raise KeyError(
+                    f"cosmo-rea6 archive for {year} has no {v!r} variable; "
+                    "it predates cosmo-rea6's wind-export convention "
+                    "(include_wind_components). Re-run the pipeline's "
+                    "transform+export phase to regenerate it with wind "
+                    "variables."
+                )
+        columns[v] = pd.concat([c[v].to_series() for c in cells]).sort_index()
+
     for d in datasets:
         d.close()
 
@@ -340,16 +488,20 @@ def _get_point_cosmo_rea6(
     # (see providers.cosmo_rea6.transform.compute_dni's docstring). Always
     # reconstruct DNI/DHI from GHI instead — the same DISC variant buem's
     # own pipeline historically trusted for this data source.
-    dni_dhi = reconstruct_dni_dhi(
-        ghi, cell_lat, cell_lon,
-        method="disc",
-        zenith_kind="apparent",
-        clip_to_extraterrestrial=True,
-        clip_dhi_to_ghi=True,
-    )
-    dni = _strip_tz(dni_dhi["DNI"])
-    dhi = _strip_tz(dni_dhi["DHI"])
-    return _finalize(pd.DataFrame({"T": t, "GHI": ghi, "DNI": dni, "DHI": dhi}))
+    if need_solar and ("DNI" in variables or "DHI" in variables):
+        dni_dhi = reconstruct_dni_dhi(
+            ghi, cell_lat, cell_lon,
+            method="disc",
+            zenith_kind="apparent",
+            clip_to_extraterrestrial=True,
+            clip_dhi_to_ghi=True,
+        )
+        if "DNI" in variables:
+            columns["DNI"] = _strip_tz(dni_dhi["DNI"])
+        if "DHI" in variables:
+            columns["DHI"] = _strip_tz(dni_dhi["DHI"])
+
+    return _finalize(pd.DataFrame(columns), variables)
 
 
 _DISPATCH = {
@@ -366,8 +518,11 @@ def get_point_weather(
     *,
     provider: str = "era5-land",
     data_dir: Path | str | None = None,
+    variables: str | list[str] | tuple[str, ...] | None = None,
+    use_case: str | None = None,
 ) -> pd.DataFrame:
-    """Return an hourly T/GHI/DHI/DNI DataFrame for one location/year.
+    """Return an hourly DataFrame of the requested variables for one
+    location/year.
 
     Extracts the nearest already-processed grid cell to *(latitude,
     longitude)* for *year*. Does **not** download or process data — call
@@ -385,30 +540,77 @@ def get_point_weather(
         (aliases ``era5``, ``cosmo``, ``merra2`` also accepted).
     data_dir : Path or str, optional
         Directory containing the provider's already-exported ``.nc``
-        files. Defaults to that provider's own ``<work_dir>/output``
-        convention (``weather.common.env.data_root()/<provider>/output``).
+        files. If omitted, first tries a country-scoped archive whose
+        bounding box contains *(latitude, longitude)* (the
+        ``<provider>/<country>/output`` layout — see
+        ``docs/COUNTRY_SCOPED_ARCHIVES.md``), then falls back to that
+        provider's flat ``<work_dir>/output`` convention
+        (``weather.common.env.data_root()/<provider>/output``) if no
+        country-scoped archive covers this location/year.
+    variables : str or list of str, optional
+        Comma-separated string or list of canonical variable names (see
+        ``weather.variables.VARIABLES``) to return, e.g. ``"T,GHI"`` or
+        ``["WS_10M", "U_10M", "V_10M"]``. Exactly one of *variables*/
+        *use_case* is required.
+    use_case : str, optional
+        Shorthand for a named variable set (see
+        ``weather.variables.USE_CASES``), e.g. ``"solar"`` or ``"wind"``.
+        Exactly one of *variables*/*use_case* is required -- no default,
+        so a caller that forgets to say what it needs gets a clear
+        error instead of a silently-substituted guess.
 
     Returns
     -------
     pandas.DataFrame
-        Tz-naive hourly ``DatetimeIndex``, columns ``T`` (degC), ``GHI``,
-        ``DHI``, ``DNI`` (all W/m^2).
+        Tz-naive hourly ``DatetimeIndex``, one column per resolved
+        variable, in the order requested.
 
     Raises
     ------
-    ValueError
-        If *provider* is not recognized.
+    WeatherAPIError
+        A ``ValueError`` subclass carrying a stable ``.code`` (see
+        ``weather.errors``). Raised if *provider* is not recognized,
+        both *variables* and *use_case* are given, or either names
+        something unknown.
     FileNotFoundError
         If no processed archive exists for *(provider, year)* under
         *data_dir*.
+    KeyError
+        If a requested variable isn't present in this archive (e.g. wind
+        requested against a pre-wind-export archive).
     ImportError
         If the ``pointquery`` (xarray/netcdf4) or ``solar`` (pvlib)
         extras are not installed.
+    """
+    canonical = resolve_provider(provider)
+
+    resolved_variables = resolve_variables(variables=variables, use_case=use_case)
+
+    if data_dir is None:
+        data_dir = _resolve_country_dir(canonical, latitude, longitude, year)
+
+    return _DISPATCH[canonical](latitude, longitude, year, data_dir, resolved_variables)
+
+
+def resolve_provider(provider: str) -> str:
+    """Validate and canonicalize a provider name or alias.
+
+    Shared by ``get_point_weather()`` and the HTTP layer's
+    ``/v1/weather/validate`` (structural validation only, no archive
+    access).
+
+    Raises
+    ------
+    WeatherAPIError
+        If *provider* is not a recognized name or alias.
     """
     normalized = str(provider).strip().lower().replace("_", "-")
     canonical = _ALIASES.get(normalized)
     if canonical is None:
         available = ", ".join(sorted(set(_ALIASES.values())))
-        raise ValueError(f"Unknown provider: {provider!r}. Available: {available}")
-
-    return _DISPATCH[canonical](latitude, longitude, year, data_dir)
+        raise WeatherAPIError(
+            errors.UNKNOWN_PROVIDER,
+            f"Unknown provider: {provider!r}. Available: {available}",
+            details={"provider": provider},
+        )
+    return canonical

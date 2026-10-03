@@ -18,6 +18,33 @@ awkward (WSL/Cygwin) and would replace already-working code. Skip both.
 
 --------------------------------------------------------------------
 
+## Authentication (Copernicus CDS)
+
+1. Register at <https://cds.climate.copernicus.eu/> (free; unified ECMWF
+   account).
+2. Log in, open your profile page, and copy your personal API key.
+3. **Accept the ERA5-Land dataset license — easy to miss, and downloads
+   fail without it even with a valid key.** The dataset's own page has
+   three tabs (Overview / Download / Documentation) and the acceptance
+   control is not on the Overview tab you land on by default:
+   - Search for "ERA5-Land" in the CDS catalogue and open the dataset.
+   - Click the **Download** tab.
+   - Scroll to the bottom, to the **API request** section. The
+     **Terms of use** block (CC BY licence, with an **Accept** button)
+     sits directly above the generated API request code — not near the
+     top of the page.
+   - Click **Accept**. Without this step the API silently rejects
+     requests even though the key itself is valid, which reads as an
+     authentication failure and sends you looking in the wrong place.
+4. Set in `.env`:
+
+   ```text
+   ERA5_CDS_URL=https://cds.climate.copernicus.eu/api
+   ERA5_CDS_KEY=<your_api_key>
+   ```
+
+--------------------------------------------------------------------
+
 ## Recommended run mode on the Linux server
 
 ### 1. tmux via the wrapper script (preferred)

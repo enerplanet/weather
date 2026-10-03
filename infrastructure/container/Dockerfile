@@ -62,16 +62,27 @@ RUN conda env create -f /tmp/weather_env.yml \
 # ── Runtime stage ──────────────────────────────────────────────────────────
 FROM continuumio/miniconda3:24.1.2-0
 
-LABEL org.opencontainers.image.source="https://github.com/UU-BUEM/weather"
+LABEL org.opencontainers.image.source="https://github.com/enerplanet/weather"
 LABEL org.opencontainers.image.description="COSMO-REA6 weather pipeline — UU-BUEM"
 LABEL org.opencontainers.image.licenses="MIT"
 
+# curl is deliberately absent. bullseye-security advertises a curl and
+# libcurl4 its pool does not serve, so installing it fails the build outright,
+# and the base image already ships wget. download.sh and decompress.sh prefer
+# curl and fall back to wget, so wget is simply the path taken now; the
+# healthcheck used wget already.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends lbzip2 pbzip2 curl \
+    && apt-get install -y --no-install-recommends lbzip2 pbzip2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the pre-built conda environment from builder
 COPY --from=builder /opt/conda/envs/weather_env /opt/conda/envs/weather_env
+
+# gunicorn (WSGI server for PIPELINE_MODE=serve) is deliberately not in
+# weather_env.yml itself -- it's Unix-only (fork()-based), same reasoning
+# as buem's own api Dockerfile. Everything else `weather serve` needs
+# (flask, pvlib, pyarrow, xarray) is already in weather_env.yml.
+RUN /opt/conda/envs/weather_env/bin/pip install gunicorn
 
 # Copy entrypoint into the image (not bind-mounted — it is container infrastructure)
 COPY infrastructure/container/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -81,7 +92,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 ENV PATH=/opt/conda/envs/weather_env/bin:$PATH
 ENV CONDA_DEFAULT_ENV=weather_env
 
-# Source code is bind-mounted at /app/src at runtime
+# The application itself. Copied rather than bind-mounted so the published
+# image runs on its own; a developer can still shadow it with a mount over the
+# same path. Last of the copies because it changes most often.
+COPY src/ /app/src/
 ENV PYTHONPATH=/app/src
 
 # Pipeline defaults (overridden by -e or docker-compose environment:)
@@ -95,6 +109,9 @@ ENV COSMO_WORK_DIR=/data
 
 # Prevent HDF5 file-locking deadlocks on GPFS / NFS file systems (HPC)
 ENV HDF5_USE_FILE_LOCKING=FALSE
+
+# weather serve (PIPELINE_MODE=serve) listens here; see entrypoint.sh
+EXPOSE 8080
 
 WORKDIR /app
 

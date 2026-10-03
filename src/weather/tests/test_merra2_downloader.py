@@ -73,3 +73,69 @@ class TestContentKey:
         active for this provider."""
         dl = Merra2Downloader(_cfg(tmp_path, _EUROPE))
         assert dl.content_key(_job()) is not None
+
+
+class TestBuildUrl:
+    """Earthdata Cloud OPeNDAP granule URL with a DAP4 constraint."""
+
+    def test_cloud_opendap_granule_and_dap4_constraint(self, tmp_path):
+        from urllib.parse import unquote
+
+        url = Merra2Downloader(_cfg(tmp_path, _NETHERLANDS)).build_url(_job())
+        base, query = url.split("?", 1)
+        assert base == (
+            "https://opendap.earthdata.nasa.gov/collections/C1276812851-GES_DISC"
+            "/granules/M2T1NXRAD.5.12.4%3AMERRA2_400.tavg1_2d_rad_Nx.20180101.nc4"
+            ".dap.nc4"
+        )
+        key, ce = query.split("=", 1)
+        assert key == "dap4.ce"
+        terms = unquote(ce).split(";")
+        assert terms == [
+            "/SWGDN[0:1:23][281:1:287][293:1:300]",
+            "/ALBEDO[0:1:23][281:1:287][293:1:300]",
+            "/time",
+            "/lat[281:1:287]",
+            "/lon[293:1:300]",
+        ]
+
+    def test_stream_override(self, tmp_path):
+        url = Merra2Downloader(_cfg(tmp_path, _NETHERLANDS)).build_url(_job(), stream=401)
+        assert "%3AMERRA2_401.tavg1_2d_rad_Nx.20180101.nc4.dap.nc4?" in url
+
+
+class TestCheckGranule:
+    """A response is only accepted if it is the granule that was requested."""
+
+    @staticmethod
+    def _write(path: Path, filename: str) -> Path:
+        import netCDF4
+
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.Filename = filename
+        return path
+
+    def test_matching_granule_passes(self, tmp_path):
+        from weather.providers.merra2.downloader import _check_granule
+
+        name = "MERRA2_400.tavg1_2d_rad_Nx.20180701.nc4"
+        _check_granule(self._write(tmp_path / "a.nc4", name), name)
+
+    def test_other_granule_raises(self, tmp_path):
+        import pytest
+
+        from weather.providers.merra2.downloader import _check_granule
+
+        path = self._write(tmp_path / "a.nc4", "MERRA2_400.tavg1_2d_slv_Nx.20180702.nc4")
+        with pytest.raises(OSError, match="20180702"):
+            _check_granule(path, "MERRA2_400.tavg1_2d_lnd_Nx.20180701.nc4")
+
+    def test_not_netcdf_raises(self, tmp_path):
+        import pytest
+
+        from weather.providers.merra2.downloader import _check_granule
+
+        path = tmp_path / "a.nc4"
+        path.write_text("<html>login page</html>")
+        with pytest.raises(OSError):
+            _check_granule(path, "MERRA2_400.tavg1_2d_lnd_Nx.20180701.nc4")

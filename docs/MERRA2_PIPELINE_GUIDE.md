@@ -2,7 +2,8 @@
 
 ## What this pipeline does
 
-Downloads MERRA-2 reanalysis data from NASA GES DISC via **OPeNDAP**
+Downloads MERRA-2 reanalysis data from NASA GES DISC via Earthdata Cloud
+**OPeNDAP**
 (server-side subsetting — no global file is ever downloaded), cropped to
 a fixed Europe bounding box (same footprint as ERA5-Land:
 `N,W,S,E = 72,-11,34,32`), and produces one monthly NetCDF-4 file per
@@ -87,7 +88,7 @@ delete the stale output file(s) first, then re-run.
 ### Why a custom session is needed
 
 NASA's login flow redirects across hosts (`urs.earthdata.nasa.gov` <->
-the GES DISC data host `goldsmr4.gesdisc.eosdis.nasa.gov`). `requests`
+the Earthdata Cloud OPeNDAP host `opendap.earthdata.nasa.gov`). `requests`
 strips the `Authorization` header on cross-host redirects by default (a
 security precaution), which breaks this specific flow. `weather.common
 .net.build_session(..., preserve_auth_hosts={...})` re-attaches the
@@ -106,11 +107,12 @@ lat_idx = round((lat_deg - (-90)) / 0.5)
 lon_idx = round((lon_deg - (-180)) / 0.625)
 ```
 
-Those indices are embedded directly in the OPeNDAP request URL, e.g.:
+Those indices are embedded in the request URL as a DAP4 constraint
+(shown unencoded), e.g.:
 
 ```text
-.../MERRA2_400.tavg1_2d_rad_Nx.20180101.nc4.nc4
-    ?SWGDN[0:1:23][248:1:324][270:1:340],ALBEDO[0:1:23][248:1:324][270:1:340],time,lat[...],lon[...]
+https://opendap.earthdata.nasa.gov/collections/C1276812851-GES_DISC/granules/M2T1NXRAD.5.12.4%3AMERRA2_400.tavg1_2d_rad_Nx.20180101.nc4.dap.nc4
+    ?dap4.ce=/SWGDN[0:1:23][248:1:324][270:1:340];/ALBEDO[0:1:23][248:1:324][270:1:340];/time;/lat[248:1:324];/lon[270:1:340]
 ```
 
 **Known limitation — no cross-provider regridding.** MERRA-2's native

@@ -25,6 +25,8 @@ pytest.importorskip("pvlib")
 from weather import get_point_weather  # noqa: E402
 from weather.common.dni_reconstruction import reconstruct_dni_dhi  # noqa: E402
 from weather.common.geo_lookup import find_nearest_cell  # noqa: E402
+from weather.errors import WeatherAPIError  # noqa: E402
+from weather.point_query import resolve_provider  # noqa: E402
 
 REQUIRED_COLUMNS = ["T", "GHI", "DHI", "DNI"]
 
@@ -65,6 +67,25 @@ class TestGeoLookup:
             find_nearest_cell(ds, 50.0, 4.0)
 
 
+class TestResolveProvider:
+    def test_canonical_passthrough(self) -> None:
+        assert resolve_provider("era5-land") == "era5-land"
+        assert resolve_provider("cosmo-rea6") == "cosmo-rea6"
+        assert resolve_provider("merra-2") == "merra-2"
+
+    def test_aliases_resolve_to_canonical(self) -> None:
+        assert resolve_provider("era5") == "era5-land"
+        assert resolve_provider("cosmo") == "cosmo-rea6"
+        assert resolve_provider("merra2") == "merra-2"
+        assert resolve_provider("ERA5") == "era5-land"  # case-insensitive
+        assert resolve_provider("merra_2") == "merra-2"  # underscore/hyphen interchangeable
+
+    def test_unknown_provider_raises(self) -> None:
+        with pytest.raises(WeatherAPIError) as exc_info:
+            resolve_provider("not-a-provider")
+        assert exc_info.value.code == "unknown_provider"
+
+
 class TestDniReconstruction:
     def test_dirint_night_masked_and_non_negative(
         self, hourly_times: pd.DatetimeIndex
@@ -101,7 +122,9 @@ class TestDniReconstruction:
 class TestGetPointWeatherRegularGrid:
     """ERA5-Land/MERRA-2-shaped archives: y/x dims, 1-D lat/lon aux coords."""
 
-    def _write_archive(self, tmp_path, subdir, filename, hourly_times, pressure_var):
+    def _write_archive(
+        self, tmp_path, subdir, filename, hourly_times, pressure_var, with_wind=False
+    ):
         lat_vals = np.array([50.0, 50.1, 50.2])
         lon_vals = np.array([4.0, 4.1, 4.2])
         shape = (len(hourly_times), 3, 3)
@@ -109,12 +132,18 @@ class TestGetPointWeatherRegularGrid:
         t = 15 + np.zeros(shape)
         pres = 101000 + np.zeros(shape)
 
+        data_vars = {
+            "GHI": (("time", "y", "x"), ghi),
+            "T": (("time", "y", "x"), t),
+            pressure_var: (("time", "y", "x"), pres),
+        }
+        if with_wind:
+            data_vars["U_10M"] = (("time", "y", "x"), 3.0 + np.zeros(shape))
+            data_vars["V_10M"] = (("time", "y", "x"), 2.0 + np.zeros(shape))
+            data_vars["WS_10M"] = (("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape))
+
         ds = xr.Dataset(
-            {
-                "GHI": (("time", "y", "x"), ghi),
-                "T": (("time", "y", "x"), t),
-                pressure_var: (("time", "y", "x"), pres),
-            },
+            data_vars,
             coords={
                 "time": hourly_times,
                 "y": np.arange(3),
@@ -132,7 +161,9 @@ class TestGetPointWeatherRegularGrid:
         out_dir = self._write_archive(
             tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times, "sp"
         )
-        df = get_point_weather(50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir)
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="solar"
+        )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
         assert df.index.tz is None
@@ -141,7 +172,9 @@ class TestGetPointWeatherRegularGrid:
         out_dir = self._write_archive(
             tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times, "PS"
         )
-        df = get_point_weather(50.05, 4.05, 2018, provider="merra2", data_dir=out_dir)
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="merra2", data_dir=out_dir, use_case="solar"
+        )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
 
@@ -153,7 +186,54 @@ class TestGetPointWeatherRegularGrid:
         out_dir = tmp_path / "era5_land" / "output"
         out_dir.mkdir(parents=True)
         with pytest.raises(FileNotFoundError):
-            get_point_weather(50.0, 4.0, 2018, provider="era5-land", data_dir=out_dir)
+            get_point_weather(
+                50.0, 4.0, 2018, provider="era5-land", data_dir=out_dir, use_case="solar"
+            )
+
+    def test_wind_use_case(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times,
+            "sp", with_wind=True,
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="wind"
+        )
+        assert list(df.columns) == ["WS_10M", "U_10M", "V_10M"]
+        assert not df.isna().any().any()
+
+    def test_variables_subset_and_order(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "merra2", "MERRA2_2018_06_all_attrs.nc", hourly_times,
+            "PS", with_wind=True,
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="merra2", data_dir=out_dir,
+            variables="WS_10M,T",
+        )
+        # Column order follows the request, not the archive's own order.
+        assert list(df.columns) == ["WS_10M", "T"]
+
+    def test_wind_variable_missing_from_archive_raises_keyerror(
+        self, tmp_path, hourly_times
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times,
+            "sp", with_wind=False,
+        )
+        with pytest.raises(KeyError, match="WS_10M"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="wind"
+            )
+
+    def test_both_variables_and_use_case_raises(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_06_all_attrs.nc", hourly_times, "sp"
+        )
+        with pytest.raises(ValueError, match="at most one"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir,
+                variables="T", use_case="solar",
+            )
 
 
 class TestGetPointWeatherCosmo:
@@ -187,7 +267,9 @@ class TestGetPointWeatherCosmo:
         out_dir.mkdir(parents=True)
         ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
 
-        df = get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+        )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
 
@@ -220,7 +302,9 @@ class TestGetPointWeatherCosmo:
         ds.to_netcdf(out_dir / "COSMO_REA6_2018.nc")  # old, no-longer-recognised name
 
         with pytest.raises(FileNotFoundError, match="annual_all_attrs"):
-            get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+            get_point_weather(
+                50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+            )
 
     def test_cosmo_archive_without_lat_lon_raises(self, tmp_path, hourly_times) -> None:
         """Regression check for the exact gap found in review: already-completed
@@ -239,4 +323,130 @@ class TestGetPointWeatherCosmo:
         ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
 
         with pytest.raises(KeyError):
-            get_point_weather(50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir)
+            get_point_weather(
+                50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+            )
+
+    def test_cosmo_wind_use_case(self, tmp_path, hourly_times) -> None:
+        lat_2d = np.array(
+            [[50.0, 50.1, 50.2], [50.05, 50.15, 50.25], [50.1, 50.2, 50.3]]
+        )
+        lon_2d = np.array(
+            [[4.0, 4.05, 4.1], [4.1, 4.15, 4.2], [4.2, 4.25, 4.3]]
+        )
+        shape = (len(hourly_times), 3, 3)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+                "U_10M": (("time", "y", "x"), 3.0 + np.zeros(shape)),
+                "V_10M": (("time", "y", "x"), 2.0 + np.zeros(shape)),
+                "WS_10M": (("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(3),
+                "x": np.arange(3),
+                "latitude": (("y", "x"), lat_2d),
+                "longitude": (("y", "x"), lon_2d),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="wind"
+        )
+        assert list(df.columns) == ["WS_10M", "U_10M", "V_10M"]
+        assert not df.isna().any().any()
+
+    def test_cosmo_point_far_from_archive_grid_raises(self, tmp_path, hourly_times) -> None:
+        """Regression check: a bbox match is not proof of grid coverage.
+
+        A country-scoped archive can be cropped far smaller than the
+        country bounding box used to route to it (e.g. a Bremen-only
+        crop stored as "germany"). Querying a point genuinely outside
+        the archive's grid must fail loudly instead of silently
+        returning the nearest cell however far away it actually is.
+        """
+        shape = (len(hourly_times), 2, 2)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(2),
+                "x": np.arange(2),
+                "latitude": (("y", "x"), np.array([[53.0, 53.1], [53.05, 53.15]])),
+                "longitude": (("y", "x"), np.array([[8.6, 8.7], [8.65, 8.75]])),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+
+        with pytest.raises(RuntimeError, match="no grid cell near"):
+            get_point_weather(
+                52.1, 6.05, 2018, provider="cosmo-rea6", data_dir=out_dir, use_case="solar"
+            )
+
+
+class TestResolveCountryDir:
+    """`_resolve_country_dir` picks the nearest-covering country archive,
+    not the first bounding-box match in dict order."""
+
+    def _write_annual_archive(
+        self, out_dir, hourly_times, *, temperature: float, lat_2d, lon_2d
+    ) -> None:
+        shape = (len(hourly_times), *lat_2d.shape)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), temperature + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(lat_2d.shape[0]),
+                "x": np.arange(lat_2d.shape[1]),
+                "latitude": (("y", "x"), lat_2d),
+                "longitude": (("y", "x"), lon_2d),
+            },
+        )
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+
+    def test_prefers_nearer_country_over_first_bbox_match(
+        self, tmp_path, hourly_times, monkeypatch
+    ) -> None:
+        """Netherlands and Germany's bounding boxes both cover a point
+        near the Dutch-German border (e.g. Loenen, NL at ~52.1N/6.05E).
+        Dict iteration order alone would pick "germany" (it sorts first
+        in geo/countries.json); this must pick "netherlands" instead,
+        since its archive grid is the one that actually reaches the
+        point."""
+        import weather.point_query as point_query_module
+
+        monkeypatch.setattr(point_query_module, "data_root", lambda: tmp_path)
+
+        self._write_annual_archive(
+            tmp_path / "cosmo_rea6" / "netherlands" / "output",
+            hourly_times,
+            temperature=15.0,
+            lat_2d=np.array([[52.0, 52.1], [52.05, 52.15]]),
+            lon_2d=np.array([[6.0, 6.1], [6.05, 6.15]]),
+        )
+        self._write_annual_archive(
+            tmp_path / "cosmo_rea6" / "germany" / "output",
+            hourly_times,
+            temperature=99.0,
+            lat_2d=np.array([[53.0, 53.1], [53.05, 53.15]]),
+            lon_2d=np.array([[8.6, 8.7], [8.65, 8.75]]),
+        )
+
+        df = get_point_weather(
+            52.1, 6.05, 2018, provider="cosmo-rea6", use_case="solar"
+        )
+        assert (df["T"] == 15.0).all()

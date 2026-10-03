@@ -11,6 +11,192 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MERRA-2 downloads failed with HTTP 410: NASA GES DISC retired its
+  on-premises OPeNDAP service (`goldsmr4.gesdisc.eosdis.nasa.gov/opendap`).
+  The downloader now requests Earthdata Cloud OPeNDAP
+  (`opendap.earthdata.nasa.gov`) with DAP4 constraints. The same Earthdata
+  Login credentials work; output files are unchanged.
+- MERRA-2 parallel downloads could save one granule's data under another
+  granule's name when several requests logged in at once. The session now
+  logs in once before downloading, and each response is checked against
+  the requested granule's name before it is kept.
+
+## [2.1.0] - 2026-09-29
+
+### Added
+
+- `docker-compose.serve.yml` attaches `weather-serve` to the shared
+  `tentacron-net` network, which it creates if absent. Callers on that
+  network reach the API as `weather-serve:8080`.
+- The serve compose file reads the host port from `HOST_PORT`, falling
+  back to `WEATHER_API_PORT` and then 8090, so existing `.env` files keep
+  working.
+
+## [2.0.2] - 2026-09-18
+
+### Fixed
+
+- The image could not be built at all. `bullseye-security` advertises a
+  `curl` and `libcurl4` that its pool does not serve, so
+  `apt-get install curl` failed with a 404 and took the whole build with
+  it. curl is no longer installed: the base image already ships wget,
+  `download.sh` and `decompress.sh` prefer curl and fall back to wget, and
+  the healthcheck used wget already, so nothing loses a capability.
+
+  2.0.1 carries the same defect, which is why it has no published image.
+
+## [2.0.1] - 2026-09-18
+
+### Added
+
+- `.dockerignore`. The build context is the repository root and the
+  reanalysis archive lives there, so a local build sent hundreds of
+  gigabytes of NetCDF to the Docker daemon and never finished. That is why
+  the missing source below was never caught locally; CI cannot catch it
+  either, because a fresh checkout has no archive at all.
+
+### Fixed
+
+- The published container image carried no application code. It copied the
+  conda environment and the entrypoint, set `PYTHONPATH` to `/app/src` and
+  left that path to a bind mount, so the image ran only where the
+  repository was already checked out beside it; started on its own it
+  raised `ModuleNotFoundError: No module named 'weather'`. `src/` is now
+  copied into the image, and the serve compose file, which pointed at a
+  locally built image name no workflow produces, now defaults to the
+  published image.
+
+- COSMO-REA6 point lookups against a country-scoped archive could
+  silently resolve to the wrong country: `_resolve_country_dir` took the
+  first bounding-box match in dict order, so a point near a shared
+  border (e.g. a Dutch point also inside Germany's box) could resolve to
+  a neighbouring country's archive instead of its own. It now picks the
+  candidate whose bounding-box centre is nearest. As a backstop for the
+  general case -- a country-scoped archive can be cropped far smaller
+  than the bounding box used to route to it -- a COSMO point query now
+  fails loudly (`422`, `archive_not_servable`) rather than returning the
+  nearest cell when that cell is implausibly far (>20 km) from the
+  requested point.
+
+### Changed
+
+- **Breaking**: `GET /v1/weather/point` returns `422` with error code
+  `archive_not_servable` (was `503` `service_unavailable`) when the
+  archive exists but cannot satisfy the request: an unrepaired ERA5-Land
+  boundary month, a file predating the lat/lon retention convention, or a
+  requested variable an older archive predates. This is a permanent
+  condition, retrying the same request never clears it, so a retryable
+  `5xx` was the wrong signal. `503` from `/v1/weather/point` now means
+  only "no API keys configured on the server". Other routes unchanged.
+
+- `GET /v1/weather/health` no longer requires an `X-API-Key` and is not
+  rate limited. A container or orchestrator liveness probe can now reach
+  it without a credential, and it answers `200` even when
+  `WEATHER_API_KEYS` is unset (a misconfigured server is still a running
+  process). The endpoint does no I/O and returns a constant, so there is
+  nothing to gate. Callers that were sending a key to it can stop; an
+  invalid key sent to health now gets `200` instead of `401`. Every other
+  route is unchanged.
+
+## [2.0.0] - 2026-08-26
+
+### Changed
+
+- **Breaking**: `GET /v1/health` moved to `GET /v1/weather/health` --
+  other services reached through the same Orchestrator expose their own
+  `/health` too; nesting under `/weather/` avoids a path collision if
+  those are ever aggregated behind one host. See #14.
+- **Breaking**: `GET /v1/weather/point`'s `format=json` response nests
+  variables under a `variables` object instead of placing them as
+  top-level keys alongside `index`
+  (`{"index": [...], "variables": {"T": [...]}}`). The flat shape
+  couldn't decode into a typed struct (e.g. Go) and let a variable
+  literally named `index` collide with the timestamps. See #13.
+- **Breaking**: every error response's `error` field is now an object
+  (`{"code": "...", "message": "...", "details": {}}`) instead of a
+  bare string. `code` is a stable, machine-readable identifier -- see
+  `weather.errors` for the full list -- callers should branch on it,
+  not on `message` text. The per-provider failure inside
+  `GET /v1/weather/providers`' 200 body uses the same object, replacing
+  its own separate `{"error": "string"}` shape. See #13.
+- **Breaking**: `GET /v1/weather/point`'s `format=json` timestamps now
+  carry an explicit `Z` (UTC) suffix (RFC3339, e.g.
+  `2018-01-01T00:30:00Z`) instead of no offset marker at all --
+  parses directly with Go's `time.Parse(time.RFC3339, ...)`. The
+  underlying data was always UTC; only the serialized string changes.
+  See #13.
+- `GET /v1/weather/point` now validates `lat`/`lon` are within
+  `[-90, 90]`/`[-180, 180]` and rejects missing/non-numeric parameters
+  with distinct error codes -- previously undocumented-but-enforced
+  bounds were declared in the OpenAPI spec only, not checked in code.
+  See #13.
+- **Breaking**: `variables`/`use_case` no longer default to `solar` --
+  one of them is now required on `get_point_weather()` and
+  `GET /v1/weather/point`. A caller that forgets to say what it needs
+  gets a clear error instead of silently getting solar data back. See #8.
+- **Breaking**: `GET /v1/health` no longer returns `providers` -- it's
+  liveness only now (`{"status": "ok"}`, no filesystem I/O). Moved to
+  new `GET /v1/weather/providers`. See #7.
+
+### Docs
+
+- `docs/openapi.yaml`: version bumped `0.2.0` -> `0.3.0` for the new
+  `/v1/weather/validate` endpoint and the `/v1/health` rename below.
+  See #14.
+- `docs/openapi.yaml`: version bumped `0.1.0` -> `0.2.0` for the
+  breaking response/error shape changes above. New
+  `openapi-spec-validator`-backed test keeps the spec itself validating
+  as OpenAPI 3.0.3, not just internally consistent with
+  `weather.variables`. See #13.
+- `docs/openapi.yaml`: `use_case`/`variables` now render as selectable
+  options (enum), same as `provider` already did, instead of free-text
+  fields. Added a concrete "discover, then query" workflow example.
+  New test (`test_openapi_sync.py`) keeps these enums from silently
+  drifting from the `weather.variables` registry -- no build step
+  connects the two otherwise.
+
+### Added
+
+- `GET /v1/weather/validate` -- pre-flight-checks a `/v1/weather/point`
+  request (same parameters) without archive access: parameters
+  present/numeric/in-range, `provider`/`use_case`/`variables` names
+  recognized. `{"valid": true, "resolved": {"provider", "variables"}}`
+  on success, same `{"error": ...}` shape as every other endpoint
+  otherwise. Requested by the Orchestrator dev, matching MEME's own
+  `/validate`. See #14.
+- Every `weather serve` response now carries `RateLimit-Limit`,
+  `RateLimit-Remaining` and `RateLimit-Reset` headers; a `429` also
+  carries `Retry-After`. Documented in `docs/openapi.yaml` on every
+  response across all four endpoints. See #13.
+- `infrastructure/container/docker-compose.serve.yml` -- runs `weather
+  serve` under gunicorn in Docker (`PIPELINE_MODE=serve`, new
+  `entrypoint.sh` case, reuses the existing COSMO-pipeline image). Its
+  own `weather` Compose namespace, deliberately not joined to any one
+  consumer's namespace (e.g. `building-simulation`), since this service
+  has more than one downstream consumer in mind. See #6.
+- `weather.variables` -- canonical registry of every variable
+  `get_point_weather()`/`weather serve` can return (name, unit,
+  description) and the named `use_case` shortcuts that group them
+  (`solar`: T/GHI/DHI/DNI, `wind`: WS_10M/U_10M/V_10M). `get_point_weather()`
+  and `GET /v1/weather/point` both gain `variables`/`use_case` params
+  (at most one). New `GET /v1/weather/variables` discovery endpoint.
+  See #5.
+
+### Changed
+
+- `point_query.py`'s per-provider extraction (`_get_point_regular_grid`,
+  `_get_point_cosmo_rea6`) now conditionally pulls only the requested
+  variables -- e.g. a wind-only query skips the pvlib DNI/DHI
+  reconstruction entirely. Defaults to the `solar` use_case
+  (T/GHI/DHI/DNI) when neither `variables` nor `use_case` is given,
+  matching every existing caller's behavior before these params existed.
+- `weather serve`'s in-process response cache key now includes the
+  resolved variables tuple, not just (provider, lat, lon, year) -- a
+  wind query and a solar query for the same location/year no longer
+  collide in the cache.
+
+### Fixed
+
 - COSMO-REA6 stamps hours as **ending**: a January file runs `01:00` on
   the 1st through `00:00` on Feb 1 — exactly 744 stamps, one whole
   month. Because that final stamp bears the *next* month's date,
