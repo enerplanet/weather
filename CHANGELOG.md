@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `get_point_weather()` and `GET /v1/weather/point` returned a partial
+  year with no error for ERA5-Land and MERRA-2 when the archive held only
+  some of the year's monthly files (for example July only). Both now
+  refuse the request (`RuntimeError`, HTTP 422 `archive_not_servable`)
+  and name the missing months, as COSMO-REA6 already did.
 - MERRA-2 downloads failed with HTTP 410: NASA GES DISC retired its
   on-premises OPeNDAP service (`goldsmr4.gesdisc.eosdis.nasa.gov/opendap`).
   The downloader now requests Earthdata Cloud OPeNDAP
