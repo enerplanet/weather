@@ -139,3 +139,18 @@ class TestCheckGranule:
         path.write_text("<html>login page</html>")
         with pytest.raises(OSError):
             _check_granule(path, "MERRA2_400.tavg1_2d_lnd_Nx.20180701.nc4")
+
+    def test_netcdf_runtime_error_becomes_oserror(self, tmp_path, monkeypatch):
+        """The download retry only catches OSError, so a netCDF4 RuntimeError
+        must be converted or it aborts the whole year."""
+        import netCDF4
+        import pytest
+
+        from weather.providers.merra2.downloader import _check_granule
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("NetCDF: Can't open HDF5 attribute")
+
+        monkeypatch.setattr(netCDF4, "Dataset", _raise)
+        with pytest.raises(OSError, match="HDF5 attribute"):
+            _check_granule(tmp_path / "a.nc4", "MERRA2_400.tavg1_2d_lnd_Nx.20180701.nc4")

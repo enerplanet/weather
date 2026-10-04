@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MERRA-2 parallel downloads could save one granule's data under another
   granule's name when several requests logged in at once. The session now
   logs in once before downloading, and each response is checked against
-  the requested granule's name before it is kept.
+  the requested granule's name before it is kept. The check reads one
+  file at a time (netCDF4 is not thread-safe), and a file it cannot read
+  is retried instead of aborting the year.
 
 ## [2.1.0] - 2026-09-29
 

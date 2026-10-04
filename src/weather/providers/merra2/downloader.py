@@ -81,6 +81,10 @@ _TRUSTED_AUTH_HOSTS = frozenset({
     _OPENDAP_HOST,
 })
 
+#: netCDF4/HDF5 is not thread-safe; concurrent granule checks from the
+#: download pool intermittently failed with invalidated HDF5 object IDs.
+_NETCDF_LOCK = threading.Lock()
+
 #: GES DISC file "product" token per collection (fixed by NASA's naming).
 _PRODUCT_TOKEN = {
     "rad": "tavg1_2d_rad_Nx",
@@ -161,8 +165,11 @@ def _check_granule(path: Path, expected: str) -> None:
     attribute, so a response for a different granule (or an HTML page)
     is caught before it replaces the destination file.
     """
-    with netCDF4.Dataset(path) as ds:
-        actual = getattr(ds, "Filename", None)
+    try:
+        with _NETCDF_LOCK, netCDF4.Dataset(path) as ds:
+            actual = getattr(ds, "Filename", None)
+    except RuntimeError as exc:
+        raise OSError(f"{path.name}: cannot read granule: {exc}") from exc
     if actual != expected:
         raise OSError(f"{path.name}: got granule {actual!r}, expected {expected!r}")
 
