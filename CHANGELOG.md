@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   some of the year's monthly files (for example July only). Both now
   refuse the request (`RuntimeError`, HTTP 422 `archive_not_servable`)
   and name the missing months, as COSMO-REA6 already did.
+- MERRA-2 downloads failed with HTTP 410: NASA GES DISC retired its
+  on-premises OPeNDAP service (`goldsmr4.gesdisc.eosdis.nasa.gov/opendap`).
+  The downloader now requests Earthdata Cloud OPeNDAP
+  (`opendap.earthdata.nasa.gov`) with DAP4 constraints. The same Earthdata
+  Login credentials work; output files are unchanged.
+- MERRA-2 parallel downloads could save one granule's data under another
+  granule's name when several requests logged in at once. The session now
+  logs in once before downloading, and each response is checked against
+  the requested granule's name before it is kept. The check reads one
+  file at a time (netCDF4 is not thread-safe), and a file it cannot read
+  is retried instead of aborting the year.
 
 ## [2.1.0] - 2026-09-29
 

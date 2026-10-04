@@ -1,4 +1,4 @@
-"""MERRA-2 concrete downloader via NASA GES DISC OPeNDAP.
+"""MERRA-2 concrete downloader via NASA Earthdata Cloud OPeNDAP.
 
 Implements :class:`~weather.providers.base_downloader.BaseDownloader` for
 the NASA GES DISC MERRA-2 archive, using **OPeNDAP** server-side
@@ -22,7 +22,7 @@ Requires a free NASA Earthdata account:
    (see :func:`weather.common.net.earthdata_auth`).
 
 NASA's login flow redirects across hosts (``urs.earthdata.nasa.gov`` <->
-the GES DISC data host), and ``requests`` strips the ``Authorization``
+the Earthdata Cloud OPeNDAP host), and ``requests`` strips the ``Authorization``
 header on such cross-host redirects by default — so a plain session
 would silently fail auth partway through.  :func:`_session` uses
 :func:`weather.common.net.build_session`'s ``preserve_auth_hosts`` to
@@ -49,10 +49,13 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+
+import netCDF4
 
 from ...common.net import build_session, earthdata_auth, exponential_backoff
 from ..base_downloader import BaseDownloader
@@ -60,15 +63,27 @@ from .downloaded_attributes import ATTRIBUTES, COLLECTIONS, attrs_by_collection
 
 logger = logging.getLogger(__name__)
 
-#: OPeNDAP host serving MERRA-2 collections.
-_GES_DISC_HOST = "goldsmr4.gesdisc.eosdis.nasa.gov"
-_OPENDAP_BASE = f"https://{_GES_DISC_HOST}/opendap/MERRA2"
+#: Earthdata Cloud OPeNDAP host. GES DISC's on-premises OPeNDAP
+#: (goldsmr4.gesdisc.eosdis.nasa.gov/opendap) is retired and answers 410.
+_OPENDAP_HOST = "opendap.earthdata.nasa.gov"
+
+#: CMR collection concept ID per collection key, as listed in each
+#: granule's CMR "OPENDAP DATA" RelatedUrl.
+_CONCEPT_ID = {
+    "rad": "C1276812851-GES_DISC",
+    "slv": "C1276812863-GES_DISC",
+    "lnd": "C1276812861-GES_DISC",
+}
 
 #: Hosts that must keep Authorization across NASA's login redirect chain.
 _TRUSTED_AUTH_HOSTS = frozenset({
     "urs.earthdata.nasa.gov",
-    _GES_DISC_HOST,
+    _OPENDAP_HOST,
 })
+
+#: netCDF4/HDF5 is not thread-safe; concurrent granule checks from the
+#: download pool intermittently failed with invalidated HDF5 object IDs.
+_NETCDF_LOCK = threading.Lock()
 
 #: GES DISC file "product" token per collection (fixed by NASA's naming).
 _PRODUCT_TOKEN = {
@@ -143,6 +158,22 @@ def _bbox_indices(area: list[float]) -> tuple[int, int, int, int]:
     return lat0, lat1, lon0, lon1
 
 
+def _check_granule(path: Path, expected: str) -> None:
+    """Raise ``OSError`` unless *path* is the NetCDF granule *expected*.
+
+    Every MERRA-2 granule carries its own name in the ``Filename`` global
+    attribute, so a response for a different granule (or an HTML page)
+    is caught before it replaces the destination file.
+    """
+    try:
+        with _NETCDF_LOCK, netCDF4.Dataset(path) as ds:
+            actual = getattr(ds, "Filename", None)
+    except RuntimeError as exc:
+        raise OSError(f"{path.name}: cannot read granule: {exc}") from exc
+    if actual != expected:
+        raise OSError(f"{path.name}: got granule {actual!r}, expected {expected!r}")
+
+
 @dataclass(frozen=True)
 class Merra2DownloadJob:
     """Coordinates identifying one MERRA-2 OPeNDAP request.
@@ -190,18 +221,39 @@ class Merra2Downloader(BaseDownloader):
     def __init__(self, config: dict[str, Any]) -> None:
         self._cfg = config
         self._session: Any = None
+        self._session_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Session / URL construction
     # ------------------------------------------------------------------
 
     def _get_session(self) -> Any:
-        if self._session is None:
-            self._session = build_session(
-                auth=earthdata_auth(),
-                preserve_auth_hosts=_TRUSTED_AUTH_HOSTS,
-            )
+        """Return the shared session, logged in once before first use.
+
+        Cloud OPeNDAP keeps the post-login return URL in a server-side
+        session cookie; parallel cold requests sharing one cookie jar were
+        observed receiving each other's granules. Logging in up front means
+        data requests never go through that redirect.
+        """
+        with self._session_lock:
+            if self._session is None:
+                session = build_session(
+                    auth=earthdata_auth(),
+                    preserve_auth_hosts=_TRUSTED_AUTH_HOSTS,
+                )
+                resp = session.get(f"https://{_OPENDAP_HOST}/login/urs", timeout=(10, 60))
+                resp.raise_for_status()
+                self._session = session
         return self._session
+
+    @staticmethod
+    def granule_name(job: Merra2DownloadJob, stream: int | None = None) -> str:
+        """Return NASA's granule filename for *job* under *stream*
+        (default: the year's primary stream, see :func:`_stream_prefix`)."""
+        if stream is None:
+            stream = _stream_prefix(job.year)
+        date_str = f"{job.year}{job.month:02d}{job.day:02d}"
+        return f"MERRA2_{stream}.{_PRODUCT_TOKEN[job.collection]}.{date_str}.nc4"
 
     def build_url(self, job: Merra2DownloadJob, stream: int | None = None) -> str:
         """Return the full OPeNDAP constraint URL for *job*.
@@ -217,38 +269,31 @@ class Merra2Downloader(BaseDownloader):
             to retry a reprocessed-month 404 under the next stream.
         """
         collection_id = COLLECTIONS[job.collection]
-        product = _PRODUCT_TOKEN[job.collection]
-        if stream is None:
-            stream = _stream_prefix(job.year)
-        date_str = f"{job.year}{job.month:02d}{job.day:02d}"
-        filename = f"MERRA2_{stream}.{product}.{date_str}.nc4"
+        filename = self.granule_name(job, stream)
 
         area = self._cfg["area"]
         lat0, lat1, lon0, lon1 = _bbox_indices(area)
 
         attrs = attrs_by_collection()[job.collection]
         var_terms = [
-            f"{ATTRIBUTES[a]['m2_name']}"
+            f"/{ATTRIBUTES[a]['m2_name']}"
             f"[0:1:23][{lat0}:1:{lat1}][{lon0}:1:{lon1}]"
             for a in attrs
         ]
         coord_terms = [
-            "time",
-            f"lat[{lat0}:1:{lat1}]",
-            f"lon[{lon0}:1:{lon1}]",
+            "/time",
+            f"/lat[{lat0}:1:{lat1}]",
+            f"/lon[{lon0}:1:{lon1}]",
         ]
-        constraint = ",".join(var_terms + coord_terms)
+        constraint = ";".join(var_terms + coord_terms)
 
-        # NB: the trailing ".nc4" is intentional and NOT a duplicate typo
-        # — GES DISC's OPeNDAP data-access endpoint appends an output-
-        # format suffix on top of the granule's own ".nc4" filename, so
-        # the real URL ends in ".nc4.nc4" (confirmed against NASA's own
-        # published example URLs).
+        # The granule ID is "<collection>:<filename>"; ".dap.nc4" is the
+        # DAP4 action that returns the subset as NetCDF-4.
         base = (
-            f"{_OPENDAP_BASE}/{collection_id}/{job.year}/{job.month:02d}/"
-            f"{filename}.nc4"
+            f"https://{_OPENDAP_HOST}/collections/{_CONCEPT_ID[job.collection]}"
+            f"/granules/{quote(f'{collection_id}:{filename}', safe='')}.dap.nc4"
         )
-        return f"{base}?{quote(constraint, safe='[],:')}"
+        return f"{base}?dap4.ce={quote(constraint, safe='[]:/;')}"
 
     # ------------------------------------------------------------------
     # BaseDownloader implementation
@@ -326,7 +371,7 @@ class Merra2Downloader(BaseDownloader):
         max_retries = self._cfg.get("opendap_max_retries", 10)
 
         @exponential_backoff(max_attempts=max_retries, exceptions=(OSError,))
-        def _download(url: str) -> Path:
+        def _download(url: str, granule: str) -> Path:
             tmp = dest.with_suffix(dest.suffix + ".part")
             logger.info("Fetching %s -> %s", job, dest.name)
             with session.get(url, stream=True, timeout=(10, 300)) as resp:
@@ -340,13 +385,18 @@ class Merra2Downloader(BaseDownloader):
             if tmp.stat().st_size == 0:
                 tmp.unlink(missing_ok=True)
                 raise OSError(f"Downloaded file is empty: {url}")
+            try:
+                _check_granule(tmp, granule)
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                raise
             tmp.replace(dest)
             return dest
 
         for i, stream in enumerate(candidates):
             url = self.build_url(job, stream=stream)
             try:
-                return _download(url)
+                return _download(url, self.granule_name(job, stream))
             except _StreamNotFound:
                 if i == len(candidates) - 1:
                     raise OSError(
