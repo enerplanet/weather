@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the requested granule's name before it is kept. The check reads one
   file at a time (netCDF4 is not thread-safe), and a file it cannot read
   is retried instead of aborting the year.
+- MERRA-2 years failed when Earthdata Cloud OPeNDAP answered 404 for a
+  granule that exists. The downloader now cycles the stream candidates
+  three times, pausing 2 s after each 404, before reporting the granule
+  missing.
 
 ## [2.1.0] - 2026-09-29
 
