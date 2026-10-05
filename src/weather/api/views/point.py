@@ -1,4 +1,4 @@
-"""GET /v1/weather/point -- hourly weather for one location/year."""
+"""GET /v1/weather/point -- hourly weather for one location and year or scenario."""
 
 from __future__ import annotations
 
@@ -18,10 +18,15 @@ from ...errors import WeatherAPIError, error_body
 
 @functools.lru_cache(maxsize=int(os.environ.get("WEATHER_API_CACHE_SIZE", "256")))
 def _cached_point_weather(
-    provider: str, latitude: float, longitude: float, year: int, variables: tuple[str, ...]
+    provider: str,
+    latitude: float,
+    longitude: float,
+    period: int | str,
+    variables: tuple[str, ...],
 ):
     """Return the point weather timeseries, cached per
-    (provider, lat, lon, year, variables).
+    (provider, lat, lon, period, variables), where *period* is a year
+    (``int``) or a scenario (``str``).
 
     Returns a DataFrame indexed on ``time`` with one column per resolved
     variable (see ``weather.variables``). Raises whatever
@@ -45,27 +50,32 @@ def _cached_point_weather(
     """
     from weather import get_point_weather
 
+    if isinstance(period, int):
+        return get_point_weather(
+            latitude, longitude, period, provider=provider, variables=variables
+        )
     return get_point_weather(
-        latitude, longitude, year, provider=provider, variables=variables
+        latitude, longitude, scenario=period, provider=provider, variables=variables
     )
 
 
 def parse_point_query(
     args: Mapping[str, str],
-) -> tuple[float, float, int, str, tuple[str, ...]]:
-    """Parse and validate provider/lat/lon/year/variables/use_case from
-    query args. Raises ``WeatherAPIError`` with the right code on any
+) -> tuple[float, float, int | str, str, tuple[str, ...]]:
+    """Parse and validate provider/lat/lon/year/scenario/variables/use_case
+    from query args. Raises ``WeatherAPIError`` with the right code on any
     problem. Shared by ``/v1/weather/point`` and ``/v1/weather/validate``.
 
-    Returns ``(latitude, longitude, year, canonical_provider, variables)``.
+    Returns ``(latitude, longitude, period, canonical_provider, variables)``,
+    where *period* is the year (``int``) or the scenario (``str``).
     """
-    from weather.point_query import resolve_provider
+    from weather.point_query import resolve_period, resolve_provider
     from weather.variables import resolve_variables
 
     try:
         latitude = float(args["lat"])
         longitude = float(args["lon"])
-        year = int(args["year"])
+        year = int(args["year"]) if "year" in args else None
     except KeyError as exc:
         raise WeatherAPIError(
             errors.MISSING_PARAMETER,
@@ -98,23 +108,24 @@ def parse_point_query(
         )
     canonical_provider = resolve_provider(provider)
 
+    period = resolve_period(year, args.get("scenario"))
     variables = resolve_variables(
         variables=args.get("variables"), use_case=args.get("use_case"),
     )
-    return latitude, longitude, year, canonical_provider, variables
+    return latitude, longitude, period, canonical_provider, variables
 
 
 class PointView(MethodView):
     def get(self) -> Any:
         try:
-            latitude, longitude, year, provider, variables = parse_point_query(
+            latitude, longitude, period, provider, variables = parse_point_query(
                 request.args
             )
         except WeatherAPIError as exc:
             return jsonify(error=error_body(exc.code, str(exc), exc.details)), 400
 
         try:
-            df = _cached_point_weather(provider, latitude, longitude, year, variables)
+            df = _cached_point_weather(provider, latitude, longitude, period, variables)
         except WeatherAPIError as exc:
             return jsonify(error=error_body(exc.code, str(exc), exc.details)), 400
         except FileNotFoundError as exc:

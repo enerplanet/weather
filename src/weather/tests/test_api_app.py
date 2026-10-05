@@ -208,6 +208,26 @@ _BAD_REQUEST_CASES = [
         errors.VARIABLES_USE_CASE_CONFLICT,
         id="variables_use_case_conflict",
     ),
+    pytest.param(
+        "provider=merra-2&lat=52.0&lon=5.0&use_case=solar",  # no year or scenario
+        errors.YEAR_SCENARIO_REQUIRED,
+        id="year_scenario_required",
+    ),
+    pytest.param(
+        "provider=merra-2&lat=52.0&lon=5.0&year=2018&scenario=p50&use_case=solar",
+        errors.YEAR_SCENARIO_CONFLICT,
+        id="year_scenario_conflict",
+    ),
+    pytest.param(
+        "provider=merra-2&lat=52.0&lon=5.0&scenario=p75&use_case=solar",
+        errors.UNKNOWN_SCENARIO,
+        id="unknown_scenario",
+    ),
+    pytest.param(
+        "provider=merra-2&lat=52.0&lon=5.0&year=twenty&use_case=solar",
+        errors.NON_NUMERIC_PARAMETER,
+        id="non_numeric_year",
+    ),
 ]
 
 
@@ -404,3 +424,33 @@ def test_weather_providers_per_item_error_uses_shared_error_shape(client, monkey
     error = resp.get_json()["providers"]["merra-2"]["error"]
     assert error["code"] == errors.PROVIDER_LISTING_FAILED
     assert "message" in error
+
+
+def test_weather_point_scenario_passed_to_point_query(client, monkeypatch):
+    import weather
+
+    calls = []
+
+    def _fake(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _fake_weather_df()[list(kwargs["variables"])]
+
+    monkeypatch.setattr(weather, "get_point_weather", _fake)
+    resp = client.get(
+        "/v1/weather/point?provider=merra-2&lat=30.0&lon=30.0&scenario=P90"
+        "&use_case=solar&format=json",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    (args, kwargs), = calls
+    assert kwargs["scenario"] == "p90"
+    assert kwargs.get("year") is None and len(args) == 2
+
+
+def test_weather_validate_resolves_scenario(client):
+    resp = client.get(
+        "/v1/weather/validate?provider=merra2&lat=52.0&lon=5.0&scenario=p10&use_case=solar",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["resolved"]["scenario"] == "p10"

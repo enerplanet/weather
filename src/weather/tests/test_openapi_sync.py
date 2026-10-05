@@ -11,6 +11,7 @@ import pytest
 
 yaml = pytest.importorskip("yaml")
 
+from weather.point_query import SCENARIOS  # noqa: E402
 from weather.variables import USE_CASES, VARIABLES  # noqa: E402
 
 OPENAPI_PATH = Path(__file__).resolve().parents[3] / "docs" / "openapi" / "openapi.yaml"
@@ -48,3 +49,9 @@ def test_openapi_spec_is_valid():
 
     spec = yaml.safe_load(OPENAPI_PATH.read_text())
     openapi_spec_validator.validate(spec)
+
+
+@pytest.mark.parametrize("path", _PATHS_WITH_VARIABLE_PARAMS)
+def test_scenario_enum_matches_registry(path):
+    enum = _query_param(path, "scenario")["schema"]["enum"]
+    assert set(enum) == set(SCENARIOS)

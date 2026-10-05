@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_point_weather(..., scenario="p10" | "p50" | "p90")` and the
+  `scenario` query parameter on `GET /v1/weather/point` and
+  `GET /v1/weather/validate` serve the P10/P50/P90 representative-year
+  files built by each provider's percentile indexer, read from the
+  output directory's `percentile/` subdirectory (country-scoped archives
+  included). Pass exactly one of `year` or `scenario`; `year` is no
+  longer required. Scenario rows are 8760 hours stamped with the year
+  1900. New error codes: `year_scenario_required`,
+  `year_scenario_conflict`, `unknown_scenario`.
+
 ### Fixed
 
 - `get_point_weather()` and `GET /v1/weather/point` returned a partial
