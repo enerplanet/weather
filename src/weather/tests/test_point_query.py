@@ -181,6 +181,41 @@ class TestGetPointWeatherRegularGrid:
                 50.05, 4.05, 2018, provider=provider, data_dir=out_dir, use_case="solar"
             )
 
+    @pytest.mark.parametrize(
+        ("provider", "subdir", "filename", "pressure_var"),
+        [
+            ("era5-land", "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", "sp"),
+            ("merra-2", "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", "PS"),
+        ],
+    )
+    def test_point_far_from_archive_grid_raises(
+        self, tmp_path, hourly_times, provider, subdir, filename, pressure_var
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, subdir, filename, hourly_times, pressure_var
+        )
+        with pytest.raises(RuntimeError, match="no grid cell near"):
+            get_point_weather(
+                52.1, 6.05, 2018, provider=provider, data_dir=out_dir, use_case="solar"
+            )
+
+    def test_distance_limit_follows_provider_grid(self, tmp_path, hourly_times) -> None:
+        """44 km past the grid edge is within one MERRA-2 cell (~50 km)
+        but several ERA5-Land cells (~10 km)."""
+        merra2_dir = self._write_archive(
+            tmp_path, "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", hourly_times, "PS"
+        )
+        era5_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times, "sp"
+        )
+        get_point_weather(
+            50.6, 4.2, 2018, provider="merra-2", data_dir=merra2_dir, use_case="solar"
+        )
+        with pytest.raises(RuntimeError, match="no grid cell near"):
+            get_point_weather(
+                50.6, 4.2, 2018, provider="era5-land", data_dir=era5_dir, use_case="solar"
+            )
+
     def test_era5_land_point_query(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
             tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times, "sp"

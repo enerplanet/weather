@@ -44,12 +44,16 @@ logger = logging.getLogger(__name__)
 _SOLAR_DERIVED = ("GHI", "DHI", "DNI")
 _WIND_VARS = ("WS_10M", "U_10M", "V_10M")
 
-# COSMO-REA6's native grid spacing is ~6 km, so a genuinely covered point
-# is never more than a few km from its nearest cell. A country-scoped
-# archive can be cropped much smaller than the country bounding box used
-# to route to it (e.g. a Bremen-only crop stored under a "germany"
-# archive dir), so a bbox match alone doesn't guarantee grid coverage.
-_MAX_CELL_DISTANCE_KM = 20.0
+# A covered point is at most half a cell diagonal from its nearest cell:
+# ~4 km for COSMO-REA6 (~6 km grid), ~8 km for ERA5-Land (0.1 deg), ~46 km
+# for MERRA-2 (0.5 x 0.625 deg). A country-scoped archive can be cropped
+# much smaller than the country bounding box used to route to it, so a
+# bbox match alone doesn't guarantee grid coverage.
+_MAX_CELL_DISTANCE_KM: dict[str, float] = {
+    "cosmo-rea6": 20.0,
+    "era5-land": 20.0,
+    "merra-2": 60.0,
+}
 
 _ALIASES: dict[str, str] = {
     "cosmo": "cosmo-rea6",
@@ -151,6 +155,32 @@ def _require_full_year(
             f"month(s) {sorted(found)} processed; missing {missing}. {hint}"
             f"Run the pipeline for the missing months (weather run "
             f"--provider {canonical} --year {year})."
+        )
+
+
+def _require_near_cell(
+    canonical: str,
+    out_dir: Path,
+    latitude: float,
+    longitude: float,
+    cell_lat: float,
+    cell_lon: float,
+) -> None:
+    """Raise ``RuntimeError`` if the nearest cell is farther from the query
+    point than *canonical*'s grid allows (see ``_MAX_CELL_DISTANCE_KM``).
+
+    RuntimeError, not WeatherAPIError: the view maps RuntimeError to 422
+    (archive present, cannot serve this request, retrying won't help);
+    WeatherAPIError from this call path becomes a blanket 400.
+    """
+    max_km = _MAX_CELL_DISTANCE_KM[canonical]
+    distance_km = haversine_km(latitude, longitude, cell_lat, cell_lon)
+    if distance_km > max_km:
+        raise RuntimeError(
+            f"Archive under {out_dir} has no grid cell near "
+            f"({latitude}, {longitude}); nearest cell is "
+            f"{distance_km:.1f} km away (max {max_km} km for {canonical}). "
+            "This archive's grid does not cover this location."
         )
 
 
@@ -308,6 +338,11 @@ def _get_point_regular_grid(
                     "with per-cell coordinates."
                 )
             cell = ds.sel(latitude=latitude, longitude=longitude, method="nearest")
+            cell_lat = float(cell["latitude"])
+            cell_lon = float(cell["longitude"])
+            _require_near_cell(
+                canonical, out_dir, latitude, longitude, cell_lat, cell_lon
+            )
             if need_solar:
                 ghi_parts.append(cell["GHI"].to_series())
                 if "PS" in cell:
@@ -323,8 +358,6 @@ def _get_point_regular_grid(
                         "this file to regenerate it with wind variables."
                     )
                 wind_parts[v].append(cell[v].to_series())
-            cell_lat = float(cell["latitude"])
-            cell_lon = float(cell["longitude"])
 
     if unrepaired and need_solar:
         raise RuntimeError(
@@ -451,22 +484,14 @@ def _get_point_cosmo_rea6(
     iy, ix = find_nearest_cell(ref, latitude, longitude)
     cell_lat = float(ref["latitude"].isel(y=iy, x=ix))
     cell_lon = float(ref["longitude"].isel(y=iy, x=ix))
-    distance_km = haversine_km(latitude, longitude, cell_lat, cell_lon)
-    if distance_km > _MAX_CELL_DISTANCE_KM:
+    try:
+        _require_near_cell(
+            "cosmo-rea6", out_dir, latitude, longitude, cell_lat, cell_lon
+        )
+    except RuntimeError:
         for d in datasets:
             d.close()
-        # RuntimeError, not WeatherAPIError: the view maps RuntimeError
-        # from this function to 422 (archive present, can't serve this
-        # request, retrying won't help -- same class as the missing-
-        # months case above). WeatherAPIError from this call path is
-        # caught upstream as a blanket 400, which is wrong for an
-        # archive-coverage problem.
-        raise RuntimeError(
-            f"Archive under {out_dir} has no grid cell near "
-            f"({latitude}, {longitude}); nearest cell is "
-            f"{distance_km:.1f} km away (max {_MAX_CELL_DISTANCE_KM} km). "
-            "This archive's grid does not cover this location."
-        )
+        raise
 
     need_solar = any(v in _SOLAR_DERIVED for v in variables)
     need_t = "T" in variables
