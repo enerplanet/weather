@@ -229,3 +229,26 @@ def test_all_providers_share_one_selection_block():
     assert blocks[0] == blocks[1] == blocks[2], (
         "providers' selection blocks have drifted apart"
     )
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "weather.providers.cosmo_rea6.percentile_index",
+        "weather.providers.era5_land.percentile_index",
+        "weather.providers.merra2.percentile_index",
+    ],
+)
+def test_failed_months_fail_the_run(module, tmp_path):
+    """A month that cannot be built must make the run raise, not exit 0."""
+    import importlib
+
+    mod = importlib.import_module(module)
+    indexer_cls = next(
+        getattr(mod, name) for name in dir(mod) if name.endswith("PercentileIndexer")
+    )
+    indexer = indexer_cls(
+        source_dir=str(tmp_path), target_dir=str(tmp_path / "out"), n_mosaic_workers=1
+    )
+    with pytest.raises(RuntimeError, match=r"12 month\(s\) failed: 01, 02, .*, 12"):
+        indexer.construct_and_save_mosaics({}, {})

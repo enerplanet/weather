@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The percentile indexers (all three providers) exited 0 when months
+  failed to build, so a run could report success with scenario files
+  missing. A month with no selection maps or no readable source file
+  now fails, and the run raises naming the failed months after every
+  month has been attempted.
 - `get_point_weather()` and `GET /v1/weather/point` returned a partial
   year with no error for ERA5-Land and MERRA-2 when the archive held only
   some of the year's monthly files (for example July only). Both now

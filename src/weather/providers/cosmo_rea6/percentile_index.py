@@ -202,7 +202,13 @@ def _build_month_mosaic(args: tuple) -> str:
     Returns
     -------
     str
-        Status message, e.g. ``"Month 01: OK"`` or a skip reason.
+        ``"Month MM: OK"``, or ``"Month MM: skipped (already done)"``
+        when valid output files already exist.
+
+    Raises
+    ------
+    RuntimeError
+        If the month has no selection maps or no readable source file.
     """
     (
         month_idx,
@@ -296,7 +302,7 @@ def _build_month_mosaic(args: tuple) -> str:
         if int(y) != NO_SOURCE_YEAR
     })
     if not sorted_years:
-        return f"Month {month_str}: skipped (no spatial maps)"
+        raise RuntimeError(f"Month {month_str}: no spatial maps")
 
     year_to_idx: dict[int, int] = {
         y: i for i, y in enumerate(sorted_years)
@@ -354,7 +360,7 @@ def _build_month_mosaic(args: tuple) -> str:
         year_lengths[_year] = int(len(_tvals))
 
     if not year_lengths:
-        return f"Month {month_str}: failed (no readable source files)"
+        raise RuntimeError(f"Month {month_str}: no readable source files")
 
     # Offsets are relative to the EARLIEST start among the winning
     # years, not to midnight. COSMO-REA6 stamps hours as ending
@@ -936,6 +942,12 @@ class CosmoRea6PercentileIndexer:
             of best-source-year values from ``_compute_ks_for_month``.
         file_path_lookup : dict
             Maps ``(year, month)`` tuples to source NetCDF file paths.
+
+        Raises
+        ------
+        RuntimeError
+            After every month has run, if any month failed, naming the
+            failed months.
         """
         import multiprocessing
 
@@ -967,6 +979,7 @@ class CosmoRea6PercentileIndexer:
                 pool.submit(_build_month_mosaic, a): a[0]
                 for a in month_args
             }
+            failed: list[int] = []
             for fut in as_completed(futures):
                 month_num = futures[fut]
                 try:
@@ -977,6 +990,13 @@ class CosmoRea6PercentileIndexer:
                         "(run with --month %d to retry)",
                         month_num, exc, month_num,
                     )
+                    failed.append(month_num)
+        if failed:
+            months = ", ".join(f"{m:02d}" for m in sorted(failed))
+            raise RuntimeError(
+                f"{len(failed)} month(s) failed: {months}. "
+                "See the log above for each cause."
+            )
 
     # ------------------------------------------------------------------
     # Orchestration
