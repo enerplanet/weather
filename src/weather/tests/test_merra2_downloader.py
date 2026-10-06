@@ -154,3 +154,73 @@ class TestCheckGranule:
         monkeypatch.setattr(netCDF4, "Dataset", _raise)
         with pytest.raises(OSError, match="HDF5 attribute"):
             _check_granule(tmp_path / "a.nc4", "MERRA2_400.tavg1_2d_lnd_Nx.20180701.nc4")
+
+
+class _StubResponse:
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        self.status_code = status
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise OSError(f"HTTP {self.status_code}")
+
+    def iter_content(self, chunk_size: int):
+        yield self._body
+
+
+class _StubSession:
+    """Answers 404 for the first *not_found* requests, then *body*."""
+
+    def __init__(self, not_found: int, body: bytes) -> None:
+        self.not_found = not_found
+        self.body = body
+        self.urls: list[str] = []
+
+    def get(self, url: str, **kwargs):
+        self.urls.append(url)
+        if len(self.urls) <= self.not_found:
+            return _StubResponse(404)
+        return _StubResponse(200, self.body)
+
+
+class TestTransientNotFound:
+    """Cloud OPeNDAP occasionally answers 404 for a granule that exists."""
+
+    @staticmethod
+    def _granule_bytes(tmp_path: Path, filename: str) -> bytes:
+        import netCDF4
+
+        path = tmp_path / "granule.nc4"
+        with netCDF4.Dataset(path, "w") as ds:
+            ds.Filename = filename
+        return path.read_bytes()
+
+    def test_primary_stream_retried_after_transient_404(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        dl = Merra2Downloader(_cfg(tmp_path, _NETHERLANDS))
+        body = self._granule_bytes(tmp_path, dl.granule_name(_job()))
+        # Primary (400) 404s, then the fallback (401) 404s as it does for
+        # most dates; the next primary attempt succeeds.
+        dl._session = _StubSession(not_found=2, body=body)
+
+        path = dl._fetch(_job())
+
+        assert path.read_bytes() == body
+        assert "MERRA2_400" in dl._session.urls[-1]
+
+    def test_gives_up_when_granule_never_appears(self, tmp_path, monkeypatch):
+        import pytest
+
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        dl = Merra2Downloader(_cfg(tmp_path, _NETHERLANDS))
+        dl._session = _StubSession(not_found=100, body=b"")
+
+        with pytest.raises(OSError, match="No MERRA-2 stream found"):
+            dl._fetch(_job())

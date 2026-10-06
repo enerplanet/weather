@@ -50,6 +50,7 @@ from __future__ import annotations
 import logging
 import math
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -108,10 +109,17 @@ _STREAM_RANGES: tuple[tuple[int, int, int], ...] = (
 )
 
 
+#: Cloud OPeNDAP occasionally answers 404 for a granule that exists, so
+#: the stream candidates are cycled this many times, pausing after each
+#: 404, before the granule is reported missing.
+_NOT_FOUND_ROUNDS = 3
+_NOT_FOUND_PAUSE_S = 2.0
+
+
 class _StreamNotFound(Exception):
     """Raised when a MERRA-2 stream candidate 404s (plain Exception, not
-    OSError, so :func:`~weather.common.net.exponential_backoff` won't
-    burn retries on what is a permanent, not transient, failure)."""
+    OSError, so :func:`~weather.common.net.exponential_backoff` does not
+    retry it; :meth:`Merra2Downloader._fetch` cycles the streams instead)."""
 
 
 #: MERRA-2's fixed global grid (0.5 deg lat x 0.625 deg lon, origin at
@@ -357,11 +365,11 @@ class Merra2Downloader(BaseDownloader):
         Tries the year's primary stream first, falling back to the next
         stream number on a 404 (see :data:`_STREAM_RANGES`'s docstring —
         NASA sometimes reprocesses a month under a bumped runid). A 404
-        is treated as immediately-fatal-for-this-stream (via
-        :class:`_StreamNotFound`, not ``OSError``) so it moves to the next
-        candidate right away instead of burning several backoff retries
-        on a permanent failure; transient errors (503, timeouts, ...)
-        still retry against the same stream as before.
+        moves straight to the next candidate rather than through the
+        backoff retries, and the candidates are cycled
+        ``_NOT_FOUND_ROUNDS`` times because Cloud OPeNDAP occasionally
+        404s a granule that exists. Other transient errors (503,
+        timeouts, ...) still retry against the same stream.
         """
         dest = self.local_path(job)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -393,18 +401,14 @@ class Merra2Downloader(BaseDownloader):
             tmp.replace(dest)
             return dest
 
-        for i, stream in enumerate(candidates):
+        for stream in candidates * _NOT_FOUND_ROUNDS:
             url = self.build_url(job, stream=stream)
             try:
                 return _download(url, self.granule_name(job, stream))
             except _StreamNotFound:
-                if i == len(candidates) - 1:
-                    raise OSError(
-                        f"No MERRA-2 stream found for {job} "
-                        f"(tried streams {candidates})"
-                    ) from None
-                logger.info(
-                    "%s: stream %d not found (404), retrying as stream %d",
-                    job, stream, candidates[i + 1],
-                )
-        raise AssertionError("unreachable")  # pragma: no cover
+                logger.info("%s: stream %d not found (404)", job, stream)
+                time.sleep(_NOT_FOUND_PAUSE_S)
+        raise OSError(
+            f"No MERRA-2 stream found for {job} (tried streams {candidates}, "
+            f"{_NOT_FOUND_ROUNDS} times each)"
+        )
