@@ -26,7 +26,7 @@ from weather import get_point_weather  # noqa: E402
 from weather.common.dni_reconstruction import reconstruct_dni_dhi  # noqa: E402
 from weather.common.geo_lookup import find_nearest_cell  # noqa: E402
 from weather.errors import WeatherAPIError  # noqa: E402
-from weather.point_query import resolve_provider  # noqa: E402
+from weather.point_query import SCENARIO_REFERENCE_YEAR, resolve_provider  # noqa: E402
 
 REQUIRED_COLUMNS = ["T", "GHI", "DHI", "DNI"]
 
@@ -124,23 +124,23 @@ class TestGetPointWeatherRegularGrid:
 
     def _write_archive(
         self, tmp_path, subdir, filename, hourly_times, pressure_var, with_wind=False,
-        months=range(1, 13),
+        months=range(1, 13), leaf="output", year=2018, temperature=15.0,
     ):
         """Write one file per month in *months*; *filename* takes a
         ``{month:02d}`` field. Each month holds ``len(hourly_times)``
         hours from its first day."""
         lat_vals = np.array([50.0, 50.1, 50.2])
         lon_vals = np.array([4.0, 4.1, 4.2])
-        out_dir = tmp_path / subdir / "output"
+        out_dir = tmp_path / subdir / leaf
         out_dir.mkdir(parents=True)
         for month in months:
             times = pd.date_range(
-                f"2018-{month:02d}-01", periods=len(hourly_times), freq="h"
+                f"{year}-{month:02d}-01", periods=len(hourly_times), freq="h"
             )
             shape = (len(times), 3, 3)
             data_vars = {
                 "GHI": (("time", "y", "x"), _synthetic_ghi(times, shape)),
-                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "T": (("time", "y", "x"), temperature + np.zeros(shape)),
                 pressure_var: (("time", "y", "x"), 101000 + np.zeros(shape)),
             }
             if with_wind:
@@ -215,6 +215,76 @@ class TestGetPointWeatherRegularGrid:
             get_point_weather(
                 50.6, 4.2, 2018, provider="era5-land", data_dir=era5_dir, use_case="solar"
             )
+
+    @pytest.mark.parametrize(
+        ("provider", "subdir", "year_file", "scenario_file", "pressure_var"),
+        [
+            ("era5-land", "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc",
+             "era5_land_p50_{month:02d}_all_attrs.nc", "sp"),
+            ("merra-2", "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc",
+             "merra2_p50_{month:02d}_all_attrs.nc", "PS"),
+        ],
+    )
+    def test_scenario_reads_percentile_files(
+        self, tmp_path, hourly_times, provider, subdir, year_file, scenario_file,
+        pressure_var,
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, subdir, year_file, hourly_times, pressure_var
+        )
+        self._write_archive(
+            tmp_path, f"{subdir}/output", scenario_file, hourly_times, pressure_var,
+            leaf="percentile", year=1980, temperature=20.0,
+        )
+        df = get_point_weather(
+            50.05, 4.05, scenario="p50", provider=provider, data_dir=out_dir,
+            use_case="solar",
+        )
+        assert (df["T"] == 20.0).all()
+        assert set(df.index.year) == {SCENARIO_REFERENCE_YEAR}
+        assert df.index.name == "time"
+        assert len(df) == 12 * len(hourly_times)
+
+    def test_scenario_without_percentile_files_raises(self, tmp_path, hourly_times) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", hourly_times, "PS"
+        )
+        with pytest.raises(FileNotFoundError, match="percentile"):
+            get_point_weather(
+                50.05, 4.05, scenario="p90", provider="merra-2", data_dir=out_dir,
+                use_case="solar",
+            )
+
+    @pytest.mark.parametrize(
+        ("kwargs", "code"),
+        [
+            ({"year": 2018, "scenario": "p50"}, "year_scenario_conflict"),
+            ({}, "year_scenario_required"),
+            ({"scenario": "p75"}, "unknown_scenario"),
+        ],
+    )
+    def test_year_or_scenario_validation(self, tmp_path, kwargs, code) -> None:
+        with pytest.raises(WeatherAPIError) as exc_info:
+            get_point_weather(
+                50.05, 4.05, provider="merra-2", data_dir=tmp_path, use_case="solar",
+                **kwargs,
+            )
+        assert exc_info.value.code == code
+
+    def test_scenario_resolves_country_archive(
+        self, tmp_path, hourly_times, monkeypatch
+    ) -> None:
+        import weather.point_query as point_query_module
+
+        monkeypatch.setattr(point_query_module, "data_root", lambda: tmp_path)
+        self._write_archive(
+            tmp_path, "merra2/belgium/output", "merra2_p10_{month:02d}_all_attrs.nc",
+            hourly_times, "PS", leaf="percentile", temperature=12.0,
+        )
+        df = get_point_weather(
+            50.05, 4.05, scenario="p10", provider="merra-2", use_case="solar"
+        )
+        assert (df["T"] == 12.0).all()
 
     def test_era5_land_point_query(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
@@ -331,6 +401,37 @@ class TestGetPointWeatherCosmo:
         )
         assert list(df.columns) == REQUIRED_COLUMNS
         assert not df.isna().any().any()
+
+    def test_cosmo_scenario_reads_monthly_percentile_files(
+        self, tmp_path, hourly_times
+    ) -> None:
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        scenario_dir = out_dir / "percentile"
+        scenario_dir.mkdir(parents=True)
+        for month in range(1, 13):
+            times = pd.date_range(f"1995-{month:02d}-01", periods=24, freq="h")
+            shape = (len(times), 2, 2)
+            xr.Dataset(
+                {
+                    "T": (("time", "y", "x"), 8 + np.zeros(shape)),
+                    "GHI": (("time", "y", "x"), _synthetic_ghi(times, shape)),
+                },
+                coords={
+                    "time": times,
+                    "y": np.arange(2),
+                    "x": np.arange(2),
+                    "latitude": (("y", "x"), np.array([[50.0, 50.1], [50.05, 50.15]])),
+                    "longitude": (("y", "x"), np.array([[4.0, 4.1], [4.05, 4.15]])),
+                },
+            ).to_netcdf(scenario_dir / f"cosmo_rea6_p90_{month:02d}_all_attrs.nc")
+
+        df = get_point_weather(
+            50.05, 4.05, scenario="p90", provider="cosmo-rea6", data_dir=out_dir,
+            use_case="solar",
+        )
+        assert (df["T"] == 8.0).all()
+        assert len(df) == 12 * 24
+        assert set(df.index.year) == {SCENARIO_REFERENCE_YEAR}
 
     def test_cosmo_annual_filename_matches_netcdfmerger_convention(
         self, tmp_path, hourly_times

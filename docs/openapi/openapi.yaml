@@ -124,13 +124,14 @@ paths:
   /v1/weather/point:
     get:
       tags: [Weather]
-      summary: Hourly weather at one location and year
+      summary: Hourly weather at one location for a year or scenario
       description: |
         Returns the nearest processed grid cell's hourly series for the
         requested variables.
 
-        Pass exactly one of `use_case` or `variables`. Passing neither
-        or both returns 400.
+        Pass exactly one of `year` or `scenario`, and exactly one of
+        `use_case` or `variables`. Passing neither or both of a pair
+        returns 400.
       operationId: getWeatherPoint
       parameters:
         - name: provider
@@ -160,11 +161,24 @@ paths:
           example: 16.4
         - name: year
           in: query
-          required: true
-          description: Must have a processed archive, see /v1/weather/providers.
+          required: false
+          description: |
+            Must have a processed archive, see /v1/weather/providers.
+            Mutually exclusive with `scenario`.
           schema:
             type: integer
           example: 2018
+        - name: scenario
+          in: query
+          required: false
+          description: |
+            Representative year ranked on monthly solar radiation (GHI):
+            `p10` low, `p50` typical, `p90` high. Mutually exclusive with
+            `year`.
+          schema:
+            type: string
+            enum: [p10, p50, p90]
+          example: p50
         - name: use_case
           in: query
           required: false
@@ -196,7 +210,8 @@ paths:
         "200":
           description: |
             8760 rows, or 8784 in a leap year. One column per resolved
-            variable, in the order requested.
+            variable, in the order requested. A scenario always returns
+            8760 rows timestamped in the year 1900.
           headers:
             RateLimit-Limit:
               $ref: "#/components/headers/RateLimitLimit"
@@ -228,7 +243,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
-          description: No processed archive for this provider and year.
+          description: No processed archive for this provider and year or scenario.
           headers:
             RateLimit-Limit:
               $ref: "#/components/headers/RateLimitLimit"
@@ -306,10 +321,22 @@ paths:
           example: 16.4
         - name: year
           in: query
-          required: true
+          required: false
+          description: Mutually exclusive with `scenario`.
           schema:
             type: integer
           example: 2018
+        - name: scenario
+          in: query
+          required: false
+          description: |
+            Representative year ranked on monthly solar radiation (GHI):
+            `p10` low, `p50` typical, `p90` high. Mutually exclusive with
+            `year`.
+          schema:
+            type: string
+            enum: [p10, p50, p90]
+          example: p50
         - name: use_case
           in: query
           required: false
@@ -581,6 +608,13 @@ components:
             provider:
               type: string
               enum: [era5-land, cosmo-rea6, merra-2]
+            year:
+              type: integer
+              description: Present when the request gave `year`.
+            scenario:
+              type: string
+              enum: [p10, p50, p90]
+              description: Present when the request gave `scenario`.
             variables:
               type: array
               items:

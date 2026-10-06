@@ -22,6 +22,9 @@ Typical usage::
 
     wind = get_point_weather(52.0, 5.0, 2018, provider="era5-land", use_case="wind")
     # df: DatetimeIndex, columns WS_10M/U_10M/V_10M (m/s)
+
+    typical = get_point_weather(52.0, 5.0, scenario="p50", provider="merra-2", use_case="solar")
+    # 8760 rows of the median-GHI representative year, stamped 1900
 """
 
 from __future__ import annotations
@@ -70,6 +73,23 @@ _OUTPUT_SUBDIR: dict[str, str] = {
     "merra-2": "merra2",
 }
 
+#: Monthly filename prefixes per provider: (calendar-year files, scenario
+#: files written by each provider's ``percentile_index.py``).
+_FILE_PREFIX: dict[str, tuple[str, str]] = {
+    "cosmo-rea6": ("COSMO_REA6", "cosmo_rea6"),
+    "era5-land": ("ERA5_LAND", "era5_land"),
+    "merra-2": ("MERRA2", "merra2"),
+}
+
+#: Representative-year scenarios ranked on monthly GHI (see
+#: docs/percentile_methodology.md): p10 low-solar, p50 typical, p90 high.
+SCENARIOS = ("p10", "p50", "p90")
+
+#: Year stamped on scenario rows, whose source months come from different
+#: years. 1900 is not a leap year (8760 h), starts on a Monday, and cannot
+#: be mistaken for archive data.
+SCENARIO_REFERENCE_YEAR = 1900
+
 def _import_xarray() -> Any:
     """Lazy-import xarray (the `pointquery` extra, not needed at import time)."""
     try:
@@ -97,8 +117,27 @@ def _output_dir(canonical: str, data_dir: Path | str | None) -> Path:
     return data_root() / _OUTPUT_SUBDIR[canonical] / "output"
 
 
+def _monthly_glob(canonical: str, period: int | str) -> str:
+    """Filename glob for the monthly files of one calendar year (``int``)
+    or one scenario (``str``, read from the ``percentile/`` subdirectory)."""
+    year_prefix, scenario_prefix = _FILE_PREFIX[canonical]
+    if isinstance(period, str):
+        return f"{scenario_prefix}_{period}_??_all_attrs.nc"
+    return f"{year_prefix}_{period}_??_all_attrs.nc"
+
+
+def _build_hint(canonical: str, period: int | str) -> str:
+    """The command that produces the files for *period*."""
+    if isinstance(period, str):
+        return (
+            f"Build the scenario files with {canonical}'s percentile indexer "
+            f"(weather fetch --provider {canonical} ... --percentile)."
+        )
+    return f"Run the pipeline (weather run --provider {canonical} --year {period})."
+
+
 def _resolve_country_dir(
-    canonical: str, latitude: float, longitude: float, year: int
+    canonical: str, latitude: float, longitude: float, period: int | str
 ) -> Path | None:
     """Best-effort lookup of a country-scoped output directory for
     *(latitude, longitude)*, following the ``<provider>/<country>/output``
@@ -107,7 +146,8 @@ def _resolve_country_dir(
     Returns ``None`` -- meaning "fall through to the provider's flat
     default directory" -- whenever nothing more specific is available:
     no country's bounding box contains the point, or the matching
-    country has no archive for *year* yet. This is an optimization over
+    country has no archive for *period* (a year or a scenario) yet. This
+    is an optimization over
     the default directory, never a requirement; every caller still gets
     a normal (or FileNotFoundError) result either way.
 
@@ -115,7 +155,7 @@ def _resolve_country_dir(
     ``geo.countries.COUNTRIES``), so two neighbouring countries can
     overlap near a shared border (e.g. Germany's box also covers eastern
     Netherlands). Among every country whose box contains the point and
-    that has an archive for *year*, this returns the one whose box
+    that has an archive for *period*, this returns the one whose box
     centre is nearest -- not the first dict-iteration match, which could
     pick a country whose archive grid does not actually reach the point.
     ``_get_point_cosmo_rea6`` still rejects the result if the archive's
@@ -124,12 +164,17 @@ def _resolve_country_dir(
     from .geo.countries import COUNTRIES
 
     provider_root = data_root() / _OUTPUT_SUBDIR[canonical]
+    marker = (
+        f"percentile/{_monthly_glob(canonical, period)}"
+        if isinstance(period, str)
+        else f"*{period}*"
+    )
     best: tuple[float, Path] | None = None
     for country, bbox in COUNTRIES.items():
         if not (bbox.south <= latitude <= bbox.north and bbox.west <= longitude <= bbox.east):
             continue
         candidate = provider_root / country / "output"
-        if not (candidate.is_dir() and any(candidate.glob(f"*{year}*"))):
+        if not (candidate.is_dir() and any(candidate.glob(marker))):
             continue
         center_lat = (bbox.south + bbox.north) / 2
         center_lon = (bbox.west + bbox.east) / 2
@@ -140,10 +185,10 @@ def _resolve_country_dir(
 
 
 def _require_full_year(
-    paths: list[Path], year: int, canonical: str, out_dir: Path, hint: str = ""
+    paths: list[Path], period: int | str, canonical: str, out_dir: Path, hint: str = ""
 ) -> None:
-    """Raise ``RuntimeError`` unless *paths* (monthly
-    ``<PREFIX>_<YYYY>_<MM>_all_attrs.nc`` files) cover all twelve months.
+    """Raise ``RuntimeError`` unless *paths* (monthly ``..._<MM>_all_attrs.nc``
+    files for one year or scenario) cover all twelve months.
 
     A year request must never be answered with a handful of months.
     """
@@ -151,10 +196,9 @@ def _require_full_year(
     missing = [f"{m:02d}" for m in range(1, 13) if f"{m:02d}" not in found]
     if missing:
         raise RuntimeError(
-            f"{canonical} archive for {year} under {out_dir} only has "
+            f"{canonical} archive for {period} under {out_dir} only has "
             f"month(s) {sorted(found)} processed; missing {missing}. {hint}"
-            f"Run the pipeline for the missing months (weather run "
-            f"--provider {canonical} --year {year})."
+            f"{_build_hint(canonical, period)}"
         )
 
 
@@ -278,12 +322,11 @@ def _regular_grid_preprocess(
 def _get_point_regular_grid(
     latitude: float,
     longitude: float,
-    year: int,
+    period: int | str,
     data_dir: Path | str | None,
     variables: tuple[str, ...],
     *,
     canonical: str,
-    filename_glob: str,
     legacy_pressure_var: str,
     legacy_temperature_var: str,
 ) -> pd.DataFrame:
@@ -303,15 +346,14 @@ def _get_point_regular_grid(
     """
     xr = _import_xarray()
     out_dir = _output_dir(canonical, data_dir)
+    filename_glob = _monthly_glob(canonical, period)
     paths = sorted(out_dir.glob(filename_glob))
     if not paths:
         raise FileNotFoundError(
             f"No processed {canonical} files matching {filename_glob!r} "
-            f"under {out_dir}. Run the {canonical} pipeline for {year} "
-            "first (weather run --provider "
-            f"{canonical} --year {year})."
+            f"under {out_dir}. {_build_hint(canonical, period)}"
         )
-    _require_full_year(paths, year, canonical, out_dir)
+    _require_full_year(paths, period, canonical, out_dir)
 
     need_solar = any(v in _SOLAR_DERIVED for v in variables)
     need_t = "T" in variables
@@ -393,50 +435,49 @@ def _get_point_regular_grid(
 
 
 def _get_point_era5_land(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None,
-    variables: tuple[str, ...],
+    latitude: float, longitude: float, period: int | str,
+    data_dir: Path | str | None, variables: tuple[str, ...],
 ) -> pd.DataFrame:
     return _get_point_regular_grid(
-        latitude, longitude, year, data_dir, variables,
+        latitude, longitude, period, data_dir, variables,
         canonical="era5-land",
-        filename_glob=f"ERA5_LAND_{year}_??_all_attrs.nc",
         legacy_pressure_var="sp",
         legacy_temperature_var="t2m",
     )
 
 
 def _get_point_merra2(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None,
-    variables: tuple[str, ...],
+    latitude: float, longitude: float, period: int | str,
+    data_dir: Path | str | None, variables: tuple[str, ...],
 ) -> pd.DataFrame:
     return _get_point_regular_grid(
-        latitude, longitude, year, data_dir, variables,
+        latitude, longitude, period, data_dir, variables,
         canonical="merra-2",
-        filename_glob=f"MERRA2_{year}_??_all_attrs.nc",
         legacy_pressure_var="PS",
         legacy_temperature_var="T2M",
     )
 
 
 def _get_point_cosmo_rea6(
-    latitude: float, longitude: float, year: int, data_dir: Path | str | None,
-    variables: tuple[str, ...],
+    latitude: float, longitude: float, period: int | str,
+    data_dir: Path | str | None, variables: tuple[str, ...],
 ) -> pd.DataFrame:
     xr = _import_xarray()
     out_dir = _output_dir("cosmo-rea6", data_dir)
 
-    annual_path = out_dir / f"COSMO_REA6_{year}_annual_all_attrs.nc"
-    if annual_path.exists():
+    # Scenarios exist only as monthly files; a year may also be merged.
+    annual_path = out_dir / f"COSMO_REA6_{period}_annual_all_attrs.nc"
+    if isinstance(period, int) and annual_path.exists():
         datasets = [xr.open_dataset(str(annual_path))]
     else:
-        paths = sorted(out_dir.glob(f"COSMO_REA6_{year}_??_all_attrs.nc"))
+        monthly_glob = _monthly_glob("cosmo-rea6", period)
+        paths = sorted(out_dir.glob(monthly_glob))
         if not paths:
             raise FileNotFoundError(
-                f"No processed cosmo-rea6 file for {year} under {out_dir} "
-                f"(looked for COSMO_REA6_{year}_annual_all_attrs.nc or "
-                f"COSMO_REA6_{year}_??_all_attrs.nc). Run the pipeline for "
-                f"{year} first (weather run --provider cosmo-rea6 --year "
-                f"{year})."
+                f"No processed cosmo-rea6 file for {period} under {out_dir} "
+                f"(looked for {monthly_glob}"
+                + (f" or {annual_path.name}" if isinstance(period, int) else "")
+                + f"). {_build_hint('cosmo-rea6', period)}"
             )
         # This is the flat, non-country-scoped fallback (no country's
         # bounding box covers this point -- see _resolve_country_dir) and
@@ -447,7 +488,7 @@ def _get_point_cosmo_rea6(
         # loudly instead, the same way an unrepaired ERA5-Land boundary
         # month does below.
         _require_full_year(
-            paths, year, "cosmo-rea6", out_dir,
+            paths, period, "cosmo-rea6", out_dir,
             hint=(
                 f"({latitude}, {longitude}) falls outside every "
                 "country-scoped archive (see COUNTRIES in "
@@ -477,7 +518,7 @@ def _get_point_cosmo_rea6(
         for d in datasets:
             d.close()
         raise KeyError(
-            f"No processed cosmo-rea6 file for {year} under {out_dir} has "
+            f"No processed cosmo-rea6 file for {period} under {out_dir} has "
             "latitude/longitude coordinates; re-run the pipeline's "
             "transform+export phase to regenerate them."
         )
@@ -513,7 +554,7 @@ def _get_point_cosmo_rea6(
                 for d in datasets:
                     d.close()
                 raise KeyError(
-                    f"cosmo-rea6 archive for {year} has no {v!r} variable; "
+                    f"cosmo-rea6 archive for {period} has no {v!r} variable; "
                     "it predates cosmo-rea6's wind-export convention "
                     "(include_wind_components). Re-run the pipeline's "
                     "transform+export phase to regenerate it with wind "
@@ -555,27 +596,34 @@ _DISPATCH = {
 def get_point_weather(
     latitude: float,
     longitude: float,
-    year: int,
+    year: int | None = None,
     *,
+    scenario: str | None = None,
     provider: str = "era5-land",
     data_dir: Path | str | None = None,
     variables: str | list[str] | tuple[str, ...] | None = None,
     use_case: str | None = None,
 ) -> pd.DataFrame:
     """Return an hourly DataFrame of the requested variables for one
-    location/year.
+    location and one year or scenario.
 
     Extracts the nearest already-processed grid cell to *(latitude,
-    longitude)* for *year*. Does **not** download or process data — call
-    the relevant provider's pipeline first if nothing has been processed
-    yet for that year.
+    longitude)*. Does **not** download or process data — call the
+    relevant provider's pipeline (or percentile indexer, for a scenario)
+    first if nothing has been processed yet.
 
     Parameters
     ----------
     latitude, longitude : float
         Target location in degrees (WGS84).
-    year : int
-        Calendar year to fetch.
+    year : int, optional
+        Calendar year to fetch. Exactly one of *year*/*scenario* is
+        required.
+    scenario : str, optional
+        One of ``SCENARIOS`` (``"p10"``, ``"p50"``, ``"p90"``): a
+        representative year ranked on monthly GHI, read from the
+        ``percentile/`` subdirectory of the output directory. Rows are
+        stamped with ``SCENARIO_REFERENCE_YEAR``.
     provider : str
         One of ``"era5-land"`` (default), ``"cosmo-rea6"``, ``"merra-2"``
         (aliases ``era5``, ``cosmo``, ``merra2`` also accepted).
@@ -587,7 +635,7 @@ def get_point_weather(
         ``docs/COUNTRY_SCOPED_ARCHIVES.md``), then falls back to that
         provider's flat ``<work_dir>/output`` convention
         (``weather.common.env.data_root()/<provider>/output``) if no
-        country-scoped archive covers this location/year.
+        country-scoped archive covers this location/year or scenario.
     variables : str or list of str, optional
         Comma-separated string or list of canonical variable names (see
         ``weather.variables.VARIABLES``) to return, e.g. ``"T,GHI"`` or
@@ -611,11 +659,11 @@ def get_point_weather(
     WeatherAPIError
         A ``ValueError`` subclass carrying a stable ``.code`` (see
         ``weather.errors``). Raised if *provider* is not recognized,
-        both *variables* and *use_case* are given, or either names
-        something unknown.
+        both or neither of *variables*/*use_case* or *year*/*scenario*
+        are given, or any of them names something unknown.
     FileNotFoundError
-        If no processed archive exists for *(provider, year)* under
-        *data_dir*.
+        If no processed archive exists for *(provider, year)* or
+        *(provider, scenario)* under *data_dir*.
     KeyError
         If a requested variable isn't present in this archive (e.g. wind
         requested against a pre-wind-export archive).
@@ -624,13 +672,60 @@ def get_point_weather(
         extras are not installed.
     """
     canonical = resolve_provider(provider)
+    period = resolve_period(year, scenario)
 
     resolved_variables = resolve_variables(variables=variables, use_case=use_case)
 
     if data_dir is None:
-        data_dir = _resolve_country_dir(canonical, latitude, longitude, year)
+        data_dir = _resolve_country_dir(canonical, latitude, longitude, period)
+    if isinstance(period, int):
+        return _DISPATCH[canonical](
+            latitude, longitude, period, data_dir, resolved_variables
+        )
 
-    return _DISPATCH[canonical](latitude, longitude, year, data_dir, resolved_variables)
+    scenario_dir = _output_dir(canonical, data_dir) / "percentile"
+    df = _DISPATCH[canonical](
+        latitude, longitude, period, scenario_dir, resolved_variables
+    )
+    df.index = pd.DatetimeIndex(
+        [t.replace(year=SCENARIO_REFERENCE_YEAR) for t in df.index],
+        name=df.index.name,
+    )
+    return df
+
+
+def resolve_period(year: int | None, scenario: str | None) -> int | str:
+    """Validate that exactly one of *year*/*scenario* is given and return
+    it (a scenario lower-cased).
+
+    Shared by ``get_point_weather()`` and the HTTP layer's query parsing.
+
+    Raises
+    ------
+    WeatherAPIError
+        If both or neither are given, or *scenario* is not in ``SCENARIOS``.
+    """
+    if year is not None and scenario is not None:
+        raise WeatherAPIError(
+            errors.YEAR_SCENARIO_CONFLICT,
+            "Pass either year or scenario, not both",
+            details={"year": year, "scenario": scenario},
+        )
+    if year is not None:
+        return int(year)
+    if scenario is None:
+        raise WeatherAPIError(
+            errors.YEAR_SCENARIO_REQUIRED,
+            f"One of year or scenario is required (scenarios: {', '.join(SCENARIOS)})",
+        )
+    normalized = str(scenario).strip().lower()
+    if normalized not in SCENARIOS:
+        raise WeatherAPIError(
+            errors.UNKNOWN_SCENARIO,
+            f"Unknown scenario: {scenario!r}. Available: {', '.join(SCENARIOS)}",
+            details={"scenario": scenario},
+        )
+    return normalized
 
 
 def resolve_provider(provider: str) -> str:

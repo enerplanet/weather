@@ -17,6 +17,9 @@ UNKNOWN_VARIABLE = "unknown_variable"
 UNKNOWN_USE_CASE = "unknown_use_case"
 VARIABLES_USE_CASE_CONFLICT = "variables_use_case_conflict"
 VARIABLES_USE_CASE_REQUIRED = "variables_use_case_required"
+UNKNOWN_SCENARIO = "unknown_scenario"
+YEAR_SCENARIO_CONFLICT = "year_scenario_conflict"
+YEAR_SCENARIO_REQUIRED = "year_scenario_required"
 
 # 401 / 404 / 422 / 429 / 503
 INVALID_API_KEY = "invalid_api_key"

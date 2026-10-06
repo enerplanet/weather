@@ -20,13 +20,18 @@ class ValidateView(MethodView):
         # extraction), so there is no "wasted time" case here to guard
         # against by duplicating that check.
         try:
-            _latitude, _longitude, _year, provider, variables = parse_point_query(
+            _latitude, _longitude, period, provider, variables = parse_point_query(
                 request.args
             )
         except WeatherAPIError as exc:
             return jsonify(error=error_body(exc.code, str(exc), exc.details)), 400
 
+        period_key = "year" if isinstance(period, int) else "scenario"
         return jsonify(
             valid=True,
-            resolved={"provider": provider, "variables": list(variables)},
+            resolved={
+                "provider": provider,
+                period_key: period,
+                "variables": list(variables),
+            },
         )
