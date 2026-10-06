@@ -245,8 +245,12 @@ paths:
             Archive exists but cannot satisfy this request: months of the
             requested year missing, an unrepaired ERA5-Land boundary
             month, a file predating the lat/lon retention convention, or a
-            requested variable this archive predates. Retrying unchanged will not help; the archive needs
-            rebuilding by an operator. Error code: archive_not_servable.
+            requested variable this archive predates, or a location
+            outside the archive's grid (no cell within 20 km for
+            COSMO-REA6 and ERA5-Land, 60 km for MERRA-2). Retrying
+            unchanged will not help: query a covered location, or the
+            archive needs rebuilding by an operator. Error code:
+            archive_not_servable.
           headers:
             RateLimit-Limit:
               $ref: "#/components/headers/RateLimitLimit"

@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   some of the year's monthly files (for example July only). Both now
   refuse the request (`RuntimeError`, HTTP 422 `archive_not_servable`)
   and name the missing months, as COSMO-REA6 already did.
+- ERA5-Land and MERRA-2 point queries for a location outside the
+  archive's grid returned the nearest edge cell's data with no error.
+  They now refuse the request (HTTP 422 `archive_not_servable`) when the
+  nearest cell is more than 20 km (ERA5-Land) or 60 km (MERRA-2) away,
+  as COSMO-REA6 already did at 20 km.
 - MERRA-2 downloads failed with HTTP 410: NASA GES DISC retired its
   on-premises OPeNDAP service (`goldsmr4.gesdisc.eosdis.nasa.gov/opendap`).
   The downloader now requests Earthdata Cloud OPeNDAP
