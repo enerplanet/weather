@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `SNOW_DEPTH` (m), `ALBEDO` (fraction 0-1) and `PS` (Pa) are queryable
+  through `get_point_weather` and `GET /v1/weather/point`, read
+  unchanged from the archive for all three providers. `ALBEDO` is `null`
+  when the sun is down.
+- `use_case=pv` resolves to `T`, `GHI`, `DHI`, `DNI`, `WS_10M`,
+  `SNOW_DEPTH`, `ALBEDO`, `PS`.
+
 ## [2.2.0] - 2026-10-06
 
 ### Added

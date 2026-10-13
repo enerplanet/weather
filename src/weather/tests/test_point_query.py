@@ -124,7 +124,7 @@ class TestGetPointWeatherRegularGrid:
 
     def _write_archive(
         self, tmp_path, subdir, filename, hourly_times, pressure_var, with_wind=False,
-        months=range(1, 13), leaf="output", year=2018, temperature=15.0,
+        with_snow=False, months=range(1, 13), leaf="output", year=2018, temperature=15.0,
     ):
         """Write one file per month in *months*; *filename* takes a
         ``{month:02d}`` field. Each month holds ``len(hourly_times)``
@@ -149,6 +149,11 @@ class TestGetPointWeatherRegularGrid:
                 data_vars["WS_10M"] = (
                     ("time", "y", "x"), np.hypot(3.0, 2.0) + np.zeros(shape)
                 )
+            if with_snow:
+                albedo = np.full(shape, 0.4)
+                albedo[0] = np.nan
+                data_vars["SNOW_DEPTH"] = (("time", "y", "x"), 0.2 + np.zeros(shape))
+                data_vars["ALBEDO"] = (("time", "y", "x"), albedo)
             ds = xr.Dataset(
                 data_vars,
                 coords={
@@ -354,6 +359,44 @@ class TestGetPointWeatherRegularGrid:
                 50.05, 4.05, 2018, provider="era5-land", data_dir=out_dir, use_case="wind"
             )
 
+    @pytest.mark.parametrize(
+        ("provider", "subdir", "filename", "pressure_var"),
+        [
+            ("era5-land", "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", "sp"),
+            ("merra-2", "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", "PS"),
+        ],
+    )
+    def test_pv_use_case(
+        self, tmp_path, hourly_times, provider, subdir, filename, pressure_var
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, subdir, filename, hourly_times, pressure_var,
+            with_wind=True, with_snow=True,
+        )
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider=provider, data_dir=out_dir, use_case="pv"
+        )
+        assert list(df.columns) == [
+            "T", "GHI", "DHI", "DNI", "WS_10M", "SNOW_DEPTH", "ALBEDO", "PS"
+        ]
+        assert (df["SNOW_DEPTH"] == 0.2).all()
+        assert (df["PS"] == 101000).all()
+        # Stored NaN (MERRA-2 night-time albedo) is returned, not filled.
+        assert df["ALBEDO"].isna().sum() == 12
+        assert (df["ALBEDO"].dropna() == 0.4).all()
+
+    def test_snow_variable_missing_from_archive_raises_keyerror(
+        self, tmp_path, hourly_times
+    ) -> None:
+        out_dir = self._write_archive(
+            tmp_path, "merra2", "MERRA2_2018_{month:02d}_all_attrs.nc", hourly_times, "PS"
+        )
+        with pytest.raises(KeyError, match="SNOW_DEPTH"):
+            get_point_weather(
+                50.05, 4.05, 2018, provider="merra-2", data_dir=out_dir,
+                variables="SNOW_DEPTH",
+            )
+
     def test_both_variables_and_use_case_raises(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
             tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc", hourly_times, "sp"
@@ -520,6 +563,42 @@ class TestGetPointWeatherCosmo:
         )
         assert list(df.columns) == ["WS_10M", "U_10M", "V_10M"]
         assert not df.isna().any().any()
+
+    def test_cosmo_pv_variables(self, tmp_path, hourly_times) -> None:
+        lat_2d = np.array(
+            [[50.0, 50.1, 50.2], [50.05, 50.15, 50.25], [50.1, 50.2, 50.3]]
+        )
+        lon_2d = np.array(
+            [[4.0, 4.05, 4.1], [4.1, 4.15, 4.2], [4.2, 4.25, 4.3]]
+        )
+        shape = (len(hourly_times), 3, 3)
+        ds = xr.Dataset(
+            {
+                "T": (("time", "y", "x"), 15 + np.zeros(shape)),
+                "GHI": (("time", "y", "x"), _synthetic_ghi(hourly_times, shape)),
+                "SNOW_DEPTH": (("time", "y", "x"), 0.2 + np.zeros(shape)),
+                "ALBEDO": (("time", "y", "x"), 0.4 + np.zeros(shape)),
+                "PS": (("time", "y", "x"), 101000 + np.zeros(shape)),
+            },
+            coords={
+                "time": hourly_times,
+                "y": np.arange(3),
+                "x": np.arange(3),
+                "latitude": (("y", "x"), lat_2d),
+                "longitude": (("y", "x"), lon_2d),
+            },
+        )
+        out_dir = tmp_path / "cosmo_rea6" / "output"
+        out_dir.mkdir(parents=True)
+        ds.to_netcdf(out_dir / "COSMO_REA6_2018_annual_all_attrs.nc")
+
+        df = get_point_weather(
+            50.05, 4.05, 2018, provider="cosmo-rea6", data_dir=out_dir,
+            variables="SNOW_DEPTH,ALBEDO,PS",
+        )
+        assert list(df.columns) == ["SNOW_DEPTH", "ALBEDO", "PS"]
+        assert (df["SNOW_DEPTH"] == 0.2).all()
+        assert (df["PS"] == 101000).all()
 
     def test_cosmo_point_far_from_archive_grid_raises(self, tmp_path, hourly_times) -> None:
         """Regression check: a bbox match is not proof of grid coverage.
