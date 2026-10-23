@@ -28,9 +28,8 @@ JSON `null`.
 
 Exactly one of `&use_case=` / `&variables=` is required -- no default,
 so a caller that forgets to say what it needs gets a 400, not a silent
-guess. `use_case=solar` (`T`/`GHI`/`DHI`/`DNI`), `use_case=wind`
-(`WS_10M`/`U_10M`/`V_10M`) and `use_case=pv` (solar plus `WS_10M`/
-`SNOW_DEPTH`/`ALBEDO`/`PS`) are the named shortcuts; `variables=T,WS_10M`
+guess. `use_case=solar` (`T`/`GHI`/`DHI`/`DNI`) or `use_case=wind`
+(`WS_10M`/`U_10M`/`V_10M`) are the named shortcuts; `variables=T,WS_10M`
 names exact variables directly (see `weather.variables` for the full
 registry). `GET /v1/weather/variables` lists every variable's name/
 unit/description and every `use_case`'s members, so a caller doesn't

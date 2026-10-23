@@ -42,11 +42,6 @@ VARIABLES: dict[str, VariableSpec] = {
     ),
     "U_10M": VariableSpec("U_10M", "m/s", "Eastward wind component at 10m"),
     "V_10M": VariableSpec("V_10M", "m/s", "Northward wind component at 10m"),
-    "SNOW_DEPTH": VariableSpec("SNOW_DEPTH", "m", "Physical snow depth"),
-    "ALBEDO": VariableSpec(
-        "ALBEDO", "1", "Surface albedo, fraction 0-1; null when the sun is down"
-    ),
-    "PS": VariableSpec("PS", "Pa", "Surface air pressure"),
 }
 
 # Deliberately conservative: only variables a technology's own model
@@ -58,7 +53,6 @@ VARIABLES: dict[str, VariableSpec] = {
 USE_CASES: dict[str, tuple[str, ...]] = {
     "solar": ("T", "GHI", "DHI", "DNI"),
     "wind": ("WS_10M", "U_10M", "V_10M"),
-    "pv": ("T", "GHI", "DHI", "DNI", "WS_10M", "SNOW_DEPTH", "ALBEDO", "PS"),
 }
 
 def resolve_variables(
