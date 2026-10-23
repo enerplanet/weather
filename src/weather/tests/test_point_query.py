@@ -132,7 +132,7 @@ class TestGetPointWeatherRegularGrid:
         lat_vals = np.array([50.0, 50.1, 50.2])
         lon_vals = np.array([4.0, 4.1, 4.2])
         out_dir = tmp_path / subdir / leaf
-        out_dir.mkdir(parents=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
         for month in months:
             times = pd.date_range(
                 f"{year}-{month:02d}-01", periods=len(hourly_times), freq="h"
@@ -244,6 +244,32 @@ class TestGetPointWeatherRegularGrid:
         assert set(df.index.year) == {SCENARIO_REFERENCE_YEAR}
         assert df.index.name == "time"
         assert len(df) == 12 * len(hourly_times)
+
+    def test_scenario_months_from_different_source_years_are_sorted(
+        self, tmp_path, hourly_times
+    ) -> None:
+        """The ERA5-Land percentile builder copies each month's time axis
+        from a reference year, so January can carry 1951 while February to
+        December carry 1950. After restamping, January must come first."""
+        out_dir = self._write_archive(
+            tmp_path, "era5_land", "ERA5_LAND_2018_{month:02d}_all_attrs.nc",
+            hourly_times, "sp",
+        )
+        scenario_file = "era5_land_p10_{month:02d}_all_attrs.nc"
+        self._write_archive(
+            tmp_path, "era5_land/output", scenario_file, hourly_times, "sp",
+            leaf="percentile", year=1950, months=range(2, 13),
+        )
+        self._write_archive(
+            tmp_path, "era5_land/output", scenario_file, hourly_times, "sp",
+            leaf="percentile", year=1951, months=[1],
+        )
+        df = get_point_weather(
+            50.05, 4.05, scenario="p10", provider="era5-land", data_dir=out_dir,
+            use_case="solar",
+        )
+        assert df.index.is_monotonic_increasing
+        assert df.index[0] == pd.Timestamp(f"{SCENARIO_REFERENCE_YEAR}-01-01")
 
     def test_scenario_without_percentile_files_raises(self, tmp_path, hourly_times) -> None:
         out_dir = self._write_archive(
