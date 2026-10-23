@@ -691,7 +691,8 @@ def get_point_weather(
         [t.replace(year=SCENARIO_REFERENCE_YEAR) for t in df.index],
         name=df.index.name,
     )
-    return df
+    # Months of one scenario can come from different source years.
+    return df.sort_index()
 
 
 def resolve_period(year: int | None, scenario: str | None) -> int | str:
