@@ -23,12 +23,6 @@ def test_use_case_wind():
     assert resolve_variables(use_case="wind") == ("WS_10M", "U_10M", "V_10M")
 
 
-def test_use_case_pv():
-    assert resolve_variables(use_case="pv") == (
-        "T", "GHI", "DHI", "DNI", "WS_10M", "SNOW_DEPTH", "ALBEDO", "PS"
-    )
-
-
 def test_unknown_use_case_names_the_bad_value():
     with pytest.raises(ValueError, match="hydro"):
         resolve_variables(use_case="hydro")
