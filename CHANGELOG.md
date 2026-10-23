@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.2.1] - 2026-10-23
+
+### Fixed
+
+- `get_point_weather(..., scenario=...)` and `GET /v1/weather/point`
+  returned ERA5-Land scenario rows out of order, January last, because
+  the scenario files stamp January with a different source year than
+  February to December. Scenario rows are now sorted after restamping
+  to 1900, so the series runs 1 January to 31 December for every
+  provider.
+
 ## [2.2.0] - 2026-10-06
 
 ### Added
