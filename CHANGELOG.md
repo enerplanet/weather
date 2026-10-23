@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- `weather serve` (`docker-compose.serve.yml`) answers to the network
+  alias `weather` on `tentacron-net`, so callers there can use
+  `weather:8080`. `weather-serve:8080` still works.
+
 ## [2.2.1] - 2026-10-23
 
 ### Fixed
