@@ -427,10 +427,15 @@ paths:
   /v1/weather/providers:
     get:
       tags: [Weather]
-      summary: Which years each provider has
+      summary: Which years and scenarios each provider has
       description: |
         Years with a processed archive per provider, inferred from
         filenames on disk. Not a directory listing.
+
+        `scenarios` lists the values of the `scenario` parameter that
+        `GET /v1/weather/point` can serve for that provider.
+        `scenario_source_years` lists the historic years those scenarios
+        draw their months from.
 
         A provider may report the same `error` object described above
         instead of `years` if its archive location cannot be read.
@@ -453,10 +458,16 @@ paths:
                 providers:
                   era5-land:
                     years: [2018, 2019]
+                    scenarios: [p10, p50, p90]
+                    scenario_source_years: [1950, 1951, 2023, 2024]
                   cosmo-rea6:
                     years: [2018]
+                    scenarios: []
+                    scenario_source_years: []
                   merra-2:
                     years: [2018]
+                    scenarios: [p10, p50]
+                    scenario_source_years: [1980, 1995, 2025]
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -690,10 +701,21 @@ components:
           additionalProperties:
             oneOf:
               - type: object
-                required: [years]
+                required: [years, scenarios, scenario_source_years]
                 properties:
                   years:
                     type: array
+                    items:
+                      type: integer
+                  scenarios:
+                    type: array
+                    description: Scenarios with all 12 monthly files, in p10, p50, p90 order.
+                    items:
+                      type: string
+                      enum: [p10, p50, p90]
+                  scenario_source_years:
+                    type: array
+                    description: Ascending years that supply at least one month to a listed scenario.
                     items:
                       type: integer
               - $ref: "#/components/schemas/ErrorResponse"
