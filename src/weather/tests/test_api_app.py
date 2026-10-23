@@ -400,6 +400,30 @@ def test_weather_providers_endpoint(client, monkeypatch):
     assert body["providers"]["cosmo-rea6"]["years"] == []
 
 
+def test_weather_providers_reports_complete_scenarios(client, monkeypatch, tmp_path):
+    """Only scenarios with all 12 monthly files are listed; source years
+    come from their ``source_year`` grids, without the -1 no-data marker."""
+    xr = pytest.importorskip("xarray")
+    import weather.registry
+    from weather.settings import EnvSettings
+
+    pct_dir = tmp_path / "percentile"
+    pct_dir.mkdir()
+    for scenario, months in (("p10", range(1, 13)), ("p90", range(1, 12))):
+        for month in months:
+            grid = np.array([[1950 + month, -1], [2024, 1951]], dtype=np.int32)
+            xr.Dataset({"source_year": (("y", "x"), grid)}).to_netcdf(
+                pct_dir / f"era5_land_{scenario}_{month:02d}_all_attrs.nc"
+            )
+    monkeypatch.setattr(weather.registry, "list_providers", lambda: ["era5-land"])
+    monkeypatch.setattr(EnvSettings, "era5_output_dir", staticmethod(lambda: tmp_path))
+
+    resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
+    entry = resp.get_json()["providers"]["era5-land"]
+    assert entry["scenarios"] == ["p10"]
+    assert entry["scenario_source_years"] == list(range(1951, 1963)) + [2024]
+
+
 def test_weather_providers_requires_api_key(client):
     resp = client.get("/v1/weather/providers")
     assert resp.status_code == 401

@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [2.3.0] - 2026-10-23
 
 ### Added
+
+- `GET /v1/weather/providers` reports `scenarios`, the P10/P50/P90
+  scenarios with all 12 monthly files, and `scenario_source_years`, the
+  years those scenarios draw their months from.
 
 - `weather serve` (`docker-compose.serve.yml`) answers to the network
   alias `weather` on `tentacron-net`, so callers there can use
