@@ -45,7 +45,6 @@ from .variables import resolve_variables
 logger = logging.getLogger(__name__)
 
 _SOLAR_DERIVED = ("GHI", "DHI", "DNI")
-_WIND_VARS = ("WS_10M", "U_10M", "V_10M")
 
 # A covered point is at most half a cell diagonal from its nearest cell:
 # ~4 km for COSMO-REA6 (~6 km grid), ~8 km for ERA5-Land (0.1 deg), ~46 km
@@ -239,6 +238,12 @@ def _finalize(df: pd.DataFrame, variables: tuple[str, ...]) -> pd.DataFrame:
     return df[list(variables)]
 
 
+def _stored_variables(variables: tuple[str, ...]) -> list[str]:
+    """Requested variables read from the archive unchanged, i.e. everything
+    except ``T`` (legacy-name fallback) and GHI/DHI/DNI (reconstructed)."""
+    return [v for v in variables if v != "T" and v not in _SOLAR_DERIVED]
+
+
 def _strip_tz(series: pd.Series) -> pd.Series:
     """Return *series* with a tz-naive index, converting if necessary.
 
@@ -357,7 +362,7 @@ def _get_point_regular_grid(
 
     need_solar = any(v in _SOLAR_DERIVED for v in variables)
     need_t = "T" in variables
-    wind_vars = [v for v in variables if v in _WIND_VARS]
+    stored_vars = _stored_variables(variables)
 
     unrepaired: list[str] = []
     preprocess = _regular_grid_preprocess(
@@ -366,7 +371,7 @@ def _get_point_regular_grid(
     ghi_parts: list[pd.Series] = []
     t_parts: list[pd.Series] = []
     ps_parts: list[pd.Series] = []
-    wind_parts: dict[str, list[pd.Series]] = {v: [] for v in wind_vars}
+    stored_parts: dict[str, list[pd.Series]] = {v: [] for v in stored_vars}
     cell_lat, cell_lon = latitude, longitude
     for p in paths:
         with xr.open_dataset(str(p)) as raw:
@@ -391,15 +396,15 @@ def _get_point_regular_grid(
                     ps_parts.append(cell["PS"].to_series())
             if need_t:
                 t_parts.append(_temperature_series(cell, legacy_temperature_var))
-            for v in wind_vars:
+            for v in stored_vars:
                 if v not in cell:
                     raise KeyError(
                         f"{p.name} has no {v!r} variable; this archive "
-                        f"predates {canonical}'s wind-export convention. "
-                        "Re-run the pipeline's transform+export phase for "
-                        "this file to regenerate it with wind variables."
+                        f"predates {canonical}'s export of it. Re-run the "
+                        "pipeline's transform+export phase for this file "
+                        f"to regenerate it with {v}."
                     )
-                wind_parts[v].append(cell[v].to_series())
+                stored_parts[v].append(cell[v].to_series())
 
     if unrepaired and need_solar:
         raise RuntimeError(
@@ -428,8 +433,8 @@ def _get_point_regular_grid(
                 columns["DNI"] = _strip_tz(dni_dhi["DNI"])
             if "DHI" in variables:
                 columns["DHI"] = _strip_tz(dni_dhi["DHI"])
-    for v in wind_vars:
-        columns[v] = pd.concat(wind_parts[v]).sort_index()
+    for v in stored_vars:
+        columns[v] = pd.concat(stored_parts[v]).sort_index()
 
     return _finalize(pd.DataFrame(columns), variables)
 
@@ -536,7 +541,7 @@ def _get_point_cosmo_rea6(
 
     need_solar = any(v in _SOLAR_DERIVED for v in variables)
     need_t = "T" in variables
-    wind_vars = [v for v in variables if v in _WIND_VARS]
+    stored_vars = _stored_variables(variables)
 
     cells = [d.isel(y=iy, x=ix) for d in datasets]
     columns: dict[str, pd.Series] = {}
@@ -548,17 +553,16 @@ def _get_point_cosmo_rea6(
     if need_solar:
         ghi = pd.concat([c["GHI"].to_series() for c in cells]).sort_index()
         columns["GHI"] = ghi
-    for v in wind_vars:
+    for v in stored_vars:
         for c in cells:
             if v not in c:
                 for d in datasets:
                     d.close()
                 raise KeyError(
                     f"cosmo-rea6 archive for {period} has no {v!r} variable; "
-                    "it predates cosmo-rea6's wind-export convention "
-                    "(include_wind_components). Re-run the pipeline's "
-                    "transform+export phase to regenerate it with wind "
-                    "variables."
+                    "it predates cosmo-rea6's export of it (wind needs "
+                    "include_wind_components). Re-run the pipeline's "
+                    f"transform+export phase to regenerate it with {v}."
                 )
         columns[v] = pd.concat([c[v].to_series() for c in cells]).sort_index()
 
