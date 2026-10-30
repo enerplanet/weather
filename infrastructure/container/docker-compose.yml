@@ -49,8 +49,15 @@
 #   COSMO_SKIP_DECOMPRESS Set to 1 to skip decompress phase
 # ──────────────────────────────────────────────────────────────────────────────
 
+# A project of its own: sharing `weather` with docker-compose.serve.yml would let
+# `down --remove-orphans` in either file remove the other's containers.
+name: weather-pipeline
+
 # ── Shared anchor (reused by all COSMO-REA6 services) ─────────────────────
 x-cosmo-base: &cosmo-base
+  # One-shot jobs started with `run`, which enables the profile itself; a
+  # plain `up` starts none of them.
+  profiles: [pipeline]
   build:
     context: ../..          # repo root — Dockerfile COPYs from here
     dockerfile: infrastructure/container/Dockerfile
