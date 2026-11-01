@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- `docker-compose.serve.yml`: the service is now `api` and sets no
+  `container_name`, so the container is `weather-api-1`. Callers on
+  `tentacron-net` keep using `weather:8080`; `weather-serve:8080` still
+  resolves, as a network alias, until every caller has moved.
+- `docker-compose.yml` (the COSMO-REA6 pipeline) is now its own Compose
+  project, `weather-pipeline`, and its jobs sit under the `pipeline`
+  profile. `docker compose run --rm <job>` works as before; a plain `up`
+  no longer starts every job.
+
 ## [2.3.0] - 2026-10-23
 
 ### Added
