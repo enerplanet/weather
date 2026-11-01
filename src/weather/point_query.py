@@ -33,6 +33,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from . import errors
@@ -155,11 +156,11 @@ def _resolve_country_dir(
     ``geo.countries.COUNTRIES``), so two neighbouring countries can
     overlap near a shared border (e.g. Germany's box also covers eastern
     Netherlands). Among every country whose box contains the point and
-    that has an archive for *period*, this returns the one whose box
-    centre is nearest -- not the first dict-iteration match, which could
-    pick a country whose archive grid does not actually reach the point.
-    ``_get_point_cosmo_rea6`` still rejects the result if the archive's
-    nearest grid cell is implausibly far away, as a backstop.
+    that has an archive for *period*, candidates are tried in order of
+    box-centre distance, and the first whose archive grid has a cell
+    within ``_MAX_CELL_DISTANCE_KM`` of the point is returned. An archive
+    cut to a few sites (e.g. austria holding only Vienna) is skipped for
+    a point it does not reach, such as Munich.
     """
     from .geo.countries import COUNTRIES
 
@@ -169,19 +170,44 @@ def _resolve_country_dir(
         if isinstance(period, str)
         else f"*{period}*"
     )
-    best: tuple[float, Path] | None = None
+    candidates: list[tuple[float, Path, Path]] = []
     for country, bbox in COUNTRIES.items():
         if not (bbox.south <= latitude <= bbox.north and bbox.west <= longitude <= bbox.east):
             continue
         candidate = provider_root / country / "output"
-        if not (candidate.is_dir() and any(candidate.glob(marker))):
+        archive = next(iter(sorted(candidate.glob(marker))), None) if candidate.is_dir() else None
+        if archive is None:
             continue
         center_lat = (bbox.south + bbox.north) / 2
         center_lon = (bbox.west + bbox.east) / 2
         dist2 = (center_lat - latitude) ** 2 + (center_lon - longitude) ** 2
-        if best is None or dist2 < best[0]:
-            best = (dist2, candidate)
-    return best[1] if best else None
+        candidates.append((dist2, candidate, archive))
+    for _, candidate, archive in sorted(candidates, key=lambda c: c[0]):
+        if _nearest_cell_km(archive, latitude, longitude) <= _MAX_CELL_DISTANCE_KM[canonical]:
+            return candidate
+    return None
+
+
+def _nearest_cell_km(path: Path, latitude: float, longitude: float) -> float:
+    """Great-circle distance in km from *(latitude, longitude)* to the
+    nearest cell of the archive file at *path*.
+
+    Handles 2-D ``latitude``/``longitude`` (COSMO-REA6) and 1-D axes
+    (ERA5-Land, MERRA-2). A file without these coordinates returns 0, so
+    it is still routed to and the caller's own coordinate check reports it.
+    """
+    xr = _import_xarray()
+    with xr.open_dataset(str(path)) as ds:
+        if "latitude" not in ds.coords or "longitude" not in ds.coords:
+            return 0.0
+        lat = ds["latitude"].values
+        lon = ds["longitude"].values
+    if lat.ndim == 1:
+        lat, lon = np.meshgrid(lat, lon, indexing="ij")
+    return min(
+        haversine_km(latitude, longitude, float(cell_lat), float(cell_lon))
+        for cell_lat, cell_lon in zip(lat.ravel(), lon.ravel(), strict=True)
+    )
 
 
 def _require_full_year(
