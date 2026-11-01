@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `get_point_weather()` and `GET /v1/weather/point` sent a point inside
+  two overlapping country boxes to the country whose box centre is
+  nearest, even when that country's archive has no cell near the point,
+  and then failed with "no grid cell near". With a Vienna-only austria
+  archive beside a Germany-wide one, Munich, Passau and Garmisch failed;
+  Dresden and Aachen failed the same way against the Czech and Dutch
+  archives. Country archives are now tried in order of box-centre
+  distance and the first whose grid reaches the point is used.
 ### Changed
 
 - `docker-compose.serve.yml`: the service is now `api` and sets no

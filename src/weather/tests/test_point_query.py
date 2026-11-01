@@ -636,3 +636,66 @@ class TestResolveCountryDir:
             52.1, 6.05, 2018, provider="cosmo-rea6", use_case="solar"
         )
         assert (df["T"] == 15.0).all()
+
+    def test_skips_country_whose_grid_does_not_reach_the_point(
+        self, tmp_path, hourly_times, monkeypatch
+    ) -> None:
+        """Munich lies in both the austria and germany boxes and the
+        austria box centre is nearer, but an austria archive cut around
+        Vienna has no cell within reach; the germany archive does."""
+        import weather.point_query as point_query_module
+
+        monkeypatch.setattr(point_query_module, "data_root", lambda: tmp_path)
+        self._write_annual_archive(
+            tmp_path / "cosmo_rea6" / "austria" / "output",
+            hourly_times,
+            temperature=15.0,
+            lat_2d=np.array([[48.2, 48.25], [48.15, 48.2]]),
+            lon_2d=np.array([[16.3, 16.35], [16.3, 16.35]]),
+        )
+        self._write_annual_archive(
+            tmp_path / "cosmo_rea6" / "germany" / "output",
+            hourly_times,
+            temperature=99.0,
+            lat_2d=np.array([[48.1, 48.15], [48.1, 48.15]]),
+            lon_2d=np.array([[11.55, 11.55], [11.6, 11.6]]),
+        )
+
+        df = get_point_weather(
+            48.14, 11.58, 2018, provider="cosmo-rea6", use_case="solar"
+        )
+        assert (df["T"] == 99.0).all()
+
+    def test_skips_regular_grid_country_out_of_reach(
+        self, tmp_path, hourly_times, monkeypatch
+    ) -> None:
+        """Same rule for MERRA-2's 1-D latitude/longitude grid."""
+        import weather.point_query as point_query_module
+
+        monkeypatch.setattr(point_query_module, "data_root", lambda: tmp_path)
+        for country, lats, lons, temperature in (
+            ("austria", [48.0, 48.5], [16.25, 16.875], 15.0),
+            ("germany", [48.0, 48.5], [11.25, 11.875], 99.0),
+        ):
+            out_dir = tmp_path / "merra2" / country / "output" / "percentile"
+            out_dir.mkdir(parents=True)
+            for month in range(1, 13):
+                times = pd.date_range(f"1980-{month:02d}-01", periods=24, freq="h")
+                shape = (len(times), 2, 2)
+                xr.Dataset(
+                    {
+                        "T": (("time", "y", "x"), temperature + np.zeros(shape)),
+                        "GHI": (("time", "y", "x"), _synthetic_ghi(times, shape)),
+                        "PS": (("time", "y", "x"), 101000 + np.zeros(shape)),
+                    },
+                    coords={
+                        "time": times,
+                        "latitude": ("y", np.array(lats)),
+                        "longitude": ("x", np.array(lons)),
+                    },
+                ).to_netcdf(out_dir / f"merra2_p50_{month:02d}_all_attrs.nc")
+
+        df = get_point_weather(
+            48.14, 11.58, scenario="p50", provider="merra-2", use_case="solar"
+        )
+        assert (df["T"] == 99.0).all()
