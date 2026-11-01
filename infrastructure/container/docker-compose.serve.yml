@@ -4,8 +4,10 @@
 # Runs weather serve's point-query HTTP API as a long-running service in its
 # own `weather` project namespace. The container also joins tentacron-net,
 # the shared network the heat services use, so a caller on that network
-# reaches it as `weather:8080` (or `weather-serve:8080`, the container
-# name). From the host, use `localhost:${HOST_PORT}`.
+# reaches it as `weather:8080`. The service name `api` is used by other
+# repositories on that network too, so it is never an address; the alias
+# `weather-serve` is kept until every caller has moved to `weather`. From the
+# host, use `localhost:${HOST_PORT}`.
 #
 # Reuses the same image as the data-pipeline compose file
 # (docker-compose.yml, weather-cosmo-rea6) -- the only difference is
@@ -36,8 +38,7 @@
 name: weather
 
 services:
-  weather-serve:
-    container_name: weather-serve
+  api:
     build:
       context: ../..
       dockerfile: infrastructure/container/Dockerfile
@@ -73,6 +74,7 @@ services:
       tentacron-net:
         aliases:
           - weather
+          - weather-serve
     restart: unless-stopped
 
 # Declared with `name:` and no `external:` so the first stack up creates it.
