@@ -437,6 +437,11 @@ paths:
         `scenario_source_years` lists the historic years those scenarios
         draw their months from.
 
+        `years`, `scenarios` and `scenario_source_years` cover every
+        archive of the provider. `countries` repeats `years` and
+        `scenarios` for each country archive, which serves points inside
+        that country's bounding box.
+
         A provider may report the same `error` object described above
         instead of `years` if its archive location cannot be read.
       operationId: getWeatherProviders
@@ -460,14 +465,20 @@ paths:
                     years: [2018, 2019]
                     scenarios: [p10, p50, p90]
                     scenario_source_years: [1950, 1951, 2023, 2024]
+                    countries: {}
                   cosmo-rea6:
                     years: [2018]
                     scenarios: []
                     scenario_source_years: []
+                    countries:
+                      germany: {years: [2018], scenarios: []}
                   merra-2:
-                    years: [2018]
+                    years: [2018, 2021]
                     scenarios: [p10, p50]
                     scenario_source_years: [1980, 1995, 2025]
+                    countries:
+                      germany: {years: [2018, 2021], scenarios: [p10, p50]}
+                      netherlands: {years: [2018], scenarios: []}
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -701,7 +712,7 @@ components:
           additionalProperties:
             oneOf:
               - type: object
-                required: [years, scenarios, scenario_source_years]
+                required: [years, scenarios, scenario_source_years, countries]
                 properties:
                   years:
                     type: array
@@ -718,4 +729,20 @@ components:
                     description: Ascending years that supply at least one month to a listed scenario.
                     items:
                       type: integer
+                  countries:
+                    type: object
+                    description: Per country archive, keyed by lower-case country name such as `germany` or `czech_republic`.
+                    additionalProperties:
+                      type: object
+                      required: [years, scenarios]
+                      properties:
+                        years:
+                          type: array
+                          items:
+                            type: integer
+                        scenarios:
+                          type: array
+                          items:
+                            type: string
+                            enum: [p10, p50, p90]
               - $ref: "#/components/schemas/ErrorResponse"

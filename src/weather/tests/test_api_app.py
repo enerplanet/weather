@@ -12,6 +12,7 @@ Run with::
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -390,9 +391,10 @@ def test_weather_providers_endpoint(client, monkeypatch):
 
     monkeypatch.setattr(weather.registry, "list_providers", lambda: ["merra-2", "cosmo-rea6"])
     monkeypatch.setattr(
-        providers_module, "_available_years",
-        lambda name: [2018] if name == "merra-2" else [],
+        providers_module, "_archive_dirs",
+        lambda name: {"": Path("unused")} if name == "merra-2" else {},
     )
+    monkeypatch.setattr(providers_module, "_years_in", lambda output_dir: [2018])
     resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 200
     body = resp.get_json()
@@ -424,6 +426,31 @@ def test_weather_providers_reports_complete_scenarios(client, monkeypatch, tmp_p
     assert entry["scenario_source_years"] == list(range(1951, 1963)) + [2024]
 
 
+def test_weather_providers_lists_country_archives(client, monkeypatch, tmp_path):
+    """Archives under <provider>/<country>/output count towards the
+    provider-wide lists and appear per country, as point queries read them."""
+    xr = pytest.importorskip("xarray")
+    import weather.registry
+
+    out = tmp_path / "merra2" / "germany" / "output"
+    (out / "percentile").mkdir(parents=True)
+    (out / "MERRA2_2018_01_all_attrs.nc").touch()
+    for month in range(1, 13):
+        grid = np.array([[2003, -1]], dtype=np.int32)
+        xr.Dataset({"source_year": (("y", "x"), grid)}).to_netcdf(
+            out / "percentile" / f"merra2_p50_{month:02d}_all_attrs.nc"
+        )
+    monkeypatch.setenv("WEATHER_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(weather.registry, "list_providers", lambda: ["merra-2"])
+
+    resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
+    entry = resp.get_json()["providers"]["merra-2"]
+    assert entry["years"] == [2018]
+    assert entry["scenarios"] == ["p50"]
+    assert entry["scenario_source_years"] == [2003]
+    assert entry["countries"] == {"germany": {"years": [2018], "scenarios": ["p50"]}}
+
+
 def test_weather_providers_requires_api_key(client):
     resp = client.get("/v1/weather/providers")
     assert resp.status_code == 401
@@ -439,10 +466,11 @@ def test_weather_providers_per_item_error_uses_shared_error_shape(client, monkey
 
     monkeypatch.setattr(weather.registry, "list_providers", lambda: ["merra-2"])
 
-    def _raise(name):
+    def _raise(output_dir):
         raise OSError("archive directory not readable")
 
-    monkeypatch.setattr(providers_module, "_available_years", _raise)
+    monkeypatch.setattr(providers_module, "_archive_dirs", lambda name: {"": Path("unused")})
+    monkeypatch.setattr(providers_module, "_years_in", _raise)
     resp = client.get("/v1/weather/providers", headers={"X-API-Key": API_KEY})
     assert resp.status_code == 200
     error = resp.get_json()["providers"]["merra-2"]["error"]
