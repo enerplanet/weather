@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- CI runs on pushes to `dev` and on pull requests into `dev`.
+
 ## [2.5.0] - 2026-11-13
 
 ### Added
