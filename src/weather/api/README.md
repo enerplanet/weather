@@ -55,7 +55,8 @@ reached through the same Orchestrator expose their own `/health` too.
 `GET /v1/weather/providers` → per-provider list of years with a processed
 archive, derived from filenames already on disk, plus the complete
 scenarios (`scenarios`) and the years they draw on
-(`scenario_source_years`). Deliberately does not
+(`scenario_source_years`), and the same years and scenarios per country
+archive (`countries`). Deliberately does not
 expose a raw directory listing.
 
 Deliberately **not** exposed: file listing, bulk/archive download, anything

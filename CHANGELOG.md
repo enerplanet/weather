@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.5.0] - 2026-11-13
+
+### Added
+
+- `GET /v1/weather/providers` reads the country archives
+  (`<provider>/<country>/output`) as well as the flat output directory,
+  and lists each country's years and scenarios under `countries`.
+  `years`, `scenarios` and `scenario_source_years` are now the union over
+  all of them. A deployment that holds only country archives previously
+  reported no years at all.
+
 ## [2.4.0] - 2026-11-02
 
 ### Fixed
